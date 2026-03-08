@@ -700,6 +700,20 @@ def register_routes(app, db, login_manager):
         return jsonify({'success': True})
 
     # ============================================================
+    # PUSH УВЕДОМЛЕНИЯ — СОХРАНИТЬ ТОКЕН
+    # ============================================================
+
+    @app.route('/security/save_push_token', methods=['POST'])
+    @login_required
+    def save_push_token():
+        token = request.form.get('push_token', '').strip()
+        if not token:
+            return jsonify({'error': 'Токен не может быть пустым'}), 400
+        current_user.push_token = token
+        db.session.commit()
+        return jsonify({'success': True})
+
+    # ============================================================
     # ГРУППЫ
     # ============================================================
 
@@ -1116,6 +1130,15 @@ def register_routes(app, db, login_manager):
                     _emit_group_update(message.group_id, message)
             except Exception:
                 pass  # Не блокируем ответ если WS недоступен
+
+        # Push-уведомление если сообщение в личном чате не будет прочитано через 10 сек
+        if message.chat_id and message.receiver_id:
+            try:
+                from socketio_events import _schedule_push_if_unread
+                preview_text = (message.content or "📎 Файл")[:60]
+                _schedule_push_if_unread(message.id, message.receiver_id, current_user.username, preview_text, app)
+            except Exception:
+                pass
 
         return jsonify({
             'success': True,
