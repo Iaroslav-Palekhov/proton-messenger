@@ -14,10 +14,6 @@ from flask import request
 from flask_login import current_user
 from flask_socketio import SocketIO, join_room, leave_room, emit
 from datetime import datetime
-import threading
-import time
-import requests as http_requests
-import re
 
 from models import db, User, Chat, Group, GroupMember, Message, BlockedUser
 from utils import format_file_size, get_file_category, get_file_icon
@@ -30,60 +26,6 @@ socketio = SocketIO(
     logger=False,
     engineio_logger=False,
 )
-
-
-# ──────────────────────────────────────────────
-# Push-уведомления (MultiPushed)
-# ──────────────────────────────────────────────
-
-def _get_multipushed_csrf(session, base_url="https://demo.multipushed.ru"):
-    try:
-        resp = session.get(base_url, timeout=5)
-        m = re.search(r'<input name="__RequestVerificationToken".*?value="([^"]+)"', resp.text)
-        return m.group(1) if m else None
-    except Exception:
-        return None
-
-
-def _send_push_notification(push_token: str, sender_name: str, message_preview: str):
-    """Отправляет пуш через demo.multipushed.ru"""
-    base_url = "https://demo.multipushed.ru"
-    try:
-        session = http_requests.Session()
-        csrf = _get_multipushed_csrf(session, base_url)
-        if not csrf:
-            return
-        body = f"{sender_name}: {message_preview}"[:100]
-        data = {
-            'clientToken': push_token,
-            'body': body,
-            '__RequestVerificationToken': csrf,
-        }
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
-            'Accept': '*/*',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Origin': base_url,
-            'Referer': f'{base_url}/',
-        }
-        session.post(f"{base_url}/home/publish", data=data, headers=headers, timeout=10)
-    except Exception:
-        pass
-
-
-def _schedule_push_if_unread(message_id: int, receiver_id: int, sender_name: str, preview: str, app):
-    """Ждёт 10 секунд, затем шлёт пуш если сообщение не прочитано"""
-    def _worker():
-        time.sleep(10)
-        with app.app_context():
-            msg = Message.query.get(message_id)
-            receiver = User.query.get(receiver_id)
-            if msg and not msg.is_read and receiver and receiver.push_token:
-                _send_push_notification(receiver.push_token, sender_name, preview)
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-
 
 # ──────────────────────────────────────────────
 # Вспомогательные функции
@@ -337,11 +279,6 @@ def on_send_message(data):
 
     # Запустить получение превью ссылки в фоне (через HTTP threading)
     _schedule_link_preview(msg.id, content, chat_id, group_id, _app)
-
-    # Запланировать push-уведомление если сообщение не будет прочитано через 10 сек
-    if chat_id and msg.receiver_id:
-        preview_text = content[:60] if content else "Новое сообщение"
-        _schedule_push_if_unread(msg.id, msg.receiver_id, current_user.username, preview_text, _app)
 
 
 def _emit_chat_update(chat_id: int, msg: Message, receiver_id: int):

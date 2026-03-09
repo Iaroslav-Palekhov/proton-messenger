@@ -14,7 +14,6 @@ class User(UserMixin, db.Model):
     status = db.Column(db.String(50), default='online')
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    push_token = db.Column(db.String(200), default=None, nullable=True)
 
     messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy=True)
     messages_received = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver', lazy=True)
