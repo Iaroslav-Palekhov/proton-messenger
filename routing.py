@@ -10,6 +10,7 @@ import secrets
 import threading
 
 from models import User, Group, GroupMember, Chat, Message, ForwardedMessage, PasswordReset, UserSession, BlockedUser
+from socketio_events import send_login_notification_to_all_devices
 from utils import (
     compress_image, get_file_category, get_file_icon,
     format_file_size, is_file_too_large, save_file,
@@ -207,7 +208,12 @@ def register_routes(app, db, login_manager):
 
                 tok = secrets.token_hex(32)
                 session['session_token'] = tok
-                _create_session_record(user.id, tok, is_current=True)
+                new_sess = _create_session_record(user.id, tok, is_current=True)
+
+                # Отправляем push-уведомление о новом входе на все устройства
+                device_info = f"{new_sess.browser or 'Браузер'} · {new_sess.os or 'ОС'}"
+                ip_addr = new_sess.ip_address or 'Неизвестно'
+                send_login_notification_to_all_devices(user.id, ip_addr, device_info, app)
 
                 return redirect(url_for('chats'))
             else:
@@ -700,6 +706,36 @@ def register_routes(app, db, login_manager):
         return jsonify({'success': True})
 
     # ============================================================
+    # PUSH УВЕДОМЛЕНИЯ — СОХРАНИТЬ ТОКЕН
+    # ============================================================
+
+    @app.route('/security/save_push_token', methods=['POST'])
+    @login_required
+    def save_push_token():
+        token = request.form.get('push_token', '').strip()
+        if not token:
+            return jsonify({'error': 'Токен не может быть пустым'}), 400
+        current_user.push_token = token
+        db.session.commit()
+        return jsonify({'success': True})
+
+    @app.route('/security/test_login_push', methods=['POST'])
+    @login_required
+    def test_login_push():
+        """Отправляет тестовое push-уведомление о входе."""
+        if not current_user.push_token:
+            return jsonify({'error': 'Push-токен не настроен'}), 400
+        current_token = session.get('session_token')
+        sess = UserSession.query.filter_by(
+            session_token=current_token,
+            user_id=current_user.id
+        ).first()
+        device_info = f"{sess.browser or 'Браузер'} · {sess.os or 'ОС'}" if sess else "Текущее устройство"
+        ip_addr = sess.ip_address if sess else "Тест"
+        send_login_notification_to_all_devices(current_user.id, ip_addr, device_info, app)
+        return jsonify({'success': True})
+
+    # ============================================================
     # ГРУППЫ
     # ============================================================
 
@@ -1116,6 +1152,15 @@ def register_routes(app, db, login_manager):
                     _emit_group_update(message.group_id, message)
             except Exception:
                 pass  # Не блокируем ответ если WS недоступен
+
+        # Push-уведомление если сообщение в личном чате не будет прочитано через 10 сек
+        if message.chat_id and message.receiver_id:
+            try:
+                from socketio_events import _schedule_push_if_unread
+                preview_text = (message.content or "📎 Файл")[:60]
+                _schedule_push_if_unread(message.id, message.receiver_id, current_user.username, preview_text, app)
+            except Exception:
+                pass
 
         return jsonify({
             'success': True,

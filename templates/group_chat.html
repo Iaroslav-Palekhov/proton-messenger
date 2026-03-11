@@ -1,22 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ group.name }} - Мессенджер{% endblock %}
-{% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/desktop_sidebar.css') }}">
-</div><!-- /ds-chat-panel -->
-</div><!-- /tg-desktop -->
 
-<style>
-@media (min-width: 901px) { .ds-back-mobile { display: none !important; } }
-</style>
-
-<script src="{{ url_for('static', filename='js/desktop_sidebar.js') }}"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    if (window.innerWidth > 900) dsStartLiveChats();
-});
-</script>
-{% endblock %}
 {% block content %}
 <style>
     /* Основные стили чата */
@@ -963,22 +948,6 @@ document.addEventListener('DOMContentLoaded', function() {
     #pinnedBanner .close-btn:hover {
         color: var(--danger);
     }
-
-/* ═══ MOBILE FIX ═══ */
-@media (max-width: 900px) {
-    .tg-desktop { display: none !important; }
-    .chat-container-mobile {
-        position: fixed !important;
-        top: 0 !important; left: 0 !important;
-        right: 0 !important; bottom: 0 !important;
-        width: 100% !important; height: 100% !important;
-        display: flex !important;
-        flex-direction: column !important;
-        overflow: hidden !important;
-        background: var(--bg-primary);
-        z-index: 1;
-    }
-}
 </style>
 
 <script>
@@ -1120,32 +1089,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     tempEl.dataset.messageId = message.id;
                     tempEl.classList.remove('sending');
                     sendingMessageId = null;
-
-                    // Обновляем контент — заменяем blob/временный вид на реальный URL с сервера
-                    const cd = tempEl.querySelector('.message-content');
-                    if (cd) {
-                        let h = '';
-                        if (message.image_path) {
-                            h += `<img src="${resolveFileUrl(message.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                        } else if (message.file_path) {
-                            const fn = message.file_name || 'Файл';
-                            const ext = fn.split('.').pop().toLowerCase();
-                            const isImgExt = ['jpg','jpeg','png','gif','webp','bmp'].includes(ext);
-                            if (isImgExt) {
-                                h += `<img src="${resolveFileUrl(message.file_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                            } else {
-                                const ico = ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
-                                h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(message.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${message.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
-                            }
-                        }
-                        if (message.content) {
-                            h += `<p style="white-space:pre-wrap;word-break:break-word;margin:${(message.file_path||message.image_path)?'6px 0 0 0':'0'};">${escapeHtml(message.content).replace(/\n/g,'<br>')}</p>`;
-                        }
-                        if (message.image_path || message.file_path) cd.innerHTML = h;
-                        if (message.link_url && !cd.querySelector('.link-preview')) injectLinkPreview(cd, message);
-                        else if (message.content && !message.link_url) pollForLinkPreview(message.id, tempEl);
-                    }
-
                     const rs = tempEl.querySelector('.read-status');
                     if (rs) { rs.innerHTML = `<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-check"></use></svg>`; rs.classList.remove('spinning'); }
                     if (!tempEl.querySelector('.message-actions')) {
@@ -1158,6 +1101,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             <button class="message-action-btn" onclick="deleteMessage(${message.id})" title="Удалить" style="color:var(--danger);"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg></button>
                         </div>`);
                     }
+                    if (message.link_url) {
+                        const cd = tempEl.querySelector('.message-content');
+                        if (cd && !cd.querySelector('.link-preview')) injectLinkPreview(cd, message);
+                    } else if (message.content) { pollForLinkPreview(message.id, tempEl); }
                 }
                 return;
             }
@@ -1451,26 +1398,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(r => r.json())
                 .then(data => {
                     if (data.success) {
-                        // Ищем элемент по tempId, или по реальному ID если WebSocket уже переименовал
-                        const t = document.querySelector(`.message[data-message-id="${tempId}"]`)
-                               || document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+                        const t = document.querySelector(`.message[data-message-id="${tempId}"]`);
                         if (t) {
                             t.dataset.messageId = data.message_id;
                             t.classList.remove('sending');
                             const cd = t.querySelector('.message-content');
                             if (cd) {
                                 let h = '';
-                                if (data.image_path) {
-                                    h += `<img src="${resolveFileUrl(data.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                                } else if (data.file_path) {
+                                if (data.image_path) h += `<img src="${resolveFileUrl(data.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
+                                else if (data.file_path) {
                                     const fn = data.file_name||'Файл', ext = fn.split('.').pop().toLowerCase();
-                                    const isImgExt = ['jpg','jpeg','png','gif','webp','bmp'].includes(ext);
-                                    if (isImgExt) {
-                                        h += `<img src="${resolveFileUrl(data.file_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                                    } else {
-                                        const ico = ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
-                                        h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(data.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${data.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
-                                    }
+                                    const ico = ['jpg','jpeg','png','gif','webp'].includes(ext)?'#icon-image':ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
+                                    h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(data.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${data.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
                                 }
                                 if (data.content) h += `<p style="white-space:pre-wrap;word-break:break-word;margin:${(data.file_path||data.image_path)?'6px 0 0 0':'0'};">${escapeHtml(data.content).replace(/\n/g,'<br>')}</p>`;
                                 if (data.image_path||data.file_path) cd.innerHTML = h;
@@ -2507,23 +2446,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 </script>
 
-
-<!-- ════ DESKTOP layout ════ -->
-<div class="tg-desktop">
-{% include '_desktop_sidebar.html' %}
-<div class="ds-chat-panel">
-
-
-<!-- ════ DESKTOP layout ════ -->
-<div class="tg-desktop">
-{% include '_desktop_sidebar.html' %}
-<div class="ds-chat-panel">
-
 <div class="chat-container">
     <!-- Шапка чата -->
     <header class="chat-header">
         <div class="chat-user-info">
-            <a href="{{ url_for('chats') }}" class="btn-icon ds-back-mobile" style="background: var(--bg-tertiary); color: var(--text-primary);">
+            <a href="{{ url_for('chats') }}" class="btn-icon" style="background: var(--bg-tertiary); color: var(--text-primary);">
                 <svg width="24" height="24" viewBox="0 0 1024 1024">
                     <use xlink:href="#icon-back"></use>
                 </svg>
@@ -2834,11 +2761,6 @@ document.addEventListener('DOMContentLoaded', function() {
                        id="messageInput"
                        placeholder="Введите сообщение..."
                        autocomplete="off"
-                       autocorrect="off"
-                       autocapitalize="sentences"
-                       inputmode="text"
-                       data-lpignore="true"
-                       data-form-type="other"
                        onkeypress="if(event.keyCode === 13 && !event.shiftKey) {event.preventDefault(); sendMessage();}">
 
                 <button type="button" class="send-btn" onclick="sendMessage()" title="Отправить">
@@ -3122,43 +3044,4 @@ function submitEdit(messageId, btn) {
     </symbol>
 </svg>
 
-</div><!-- /ds-chat-panel -->
-</div><!-- /tg-desktop -->
-
-<style>
-@media (min-width: 901px) { .ds-back-mobile { display: none !important; } }
-</style>
-
-<script src="{{ url_for('static', filename='js/desktop_sidebar.js') }}"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    if (window.innerWidth > 900) dsStartLiveChats();
-});
-</script>
-
-</div><!-- /ds-chat-panel -->
-</div><!-- /tg-desktop -->
-
-<style>
-@media (min-width: 901px) { .ds-back-mobile { display: none !important; } }
-</style>
-
-<script>
-if (window.innerWidth <= 900) {
-    document.addEventListener('DOMContentLoaded', function() {
-        var chatEl = document.querySelector('.chat-container');
-        if (chatEl) {
-            chatEl.classList.add('chat-container-mobile');
-            document.body.appendChild(chatEl);
-        }
-    });
-}
-</script>
-
-<script src="{{ url_for('static', filename='js/desktop_sidebar.js') }}"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    if (window.innerWidth > 900) dsStartLiveChats();
-});
-</script>
 {% endblock %}

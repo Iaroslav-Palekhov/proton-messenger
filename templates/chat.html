@@ -1,22 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Чат с {{ other_user.username if other_user.username else other_user.email.split('@')[0] }} - Мессенджер{% endblock %}
-{% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/desktop_sidebar.css') }}">
-</div><!-- /ds-chat-panel -->
-</div><!-- /tg-desktop -->
-
-<style>
-/* Hide back button on desktop */
-@media (min-width: 901px) { .ds-back-mobile { display: none !important; } }
-</style>
-
-<script src="{{ url_for('static', filename='js/desktop_sidebar.js') }}"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    if (window.innerWidth > 900) dsStartLiveChats();
-});
-</script>
-{% endblock %}
 {% block content %}
 <style>
 /* Основные стили чата */
@@ -28,7 +11,11 @@ document.addEventListener('DOMContentLoaded', function() {
     max-height: -webkit-fill-available;
     background: var(--bg-primary);
     overflow: hidden;
-    position: relative;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
 }
 .chat-header {
     padding: 15px 20px;
@@ -628,35 +615,7 @@ document.addEventListener('DOMContentLoaded', function() {
         min-width: 180px;
     }
 }
-
-/* ═══ MOBILE FIX ═══ */
-@media (max-width: 900px) {
-    .tg-desktop { display: none !important; }
-    .chat-container-mobile {
-        position: fixed !important;
-        top: 0 !important; left: 0 !important;
-        right: 0 !important; bottom: 0 !important;
-        width: 100% !important; height: 100% !important;
-        display: flex !important;
-        flex-direction: column !important;
-        overflow: hidden !important;
-        background: var(--bg-primary);
-        z-index: 1;
-    }
-}
 </style>
-<script>
-// On mobile: move chat-container out of tg-desktop wrapper, append to body
-if (window.innerWidth <= 900) {
-    document.addEventListener('DOMContentLoaded', function() {
-        var chatEl = document.querySelector('.chat-container');
-        if (chatEl) {
-            chatEl.classList.add('chat-container-mobile');
-            document.body.appendChild(chatEl);
-        }
-    });
-}
-</script>
 <script>
 // Глобальные переменные
 let lastMessageId = {{ messages[-1].id if messages else 0 }};
@@ -965,26 +924,18 @@ function sendMessage() {
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    // Ищем элемент по tempId, или по реальному ID если WebSocket уже переименовал
-                    const t = document.querySelector(`.message[data-message-id="${tempId}"]`)
-                           || document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+                    const t = document.querySelector(`.message[data-message-id="${tempId}"]`);
                     if (t) {
                         t.dataset.messageId = data.message_id;
                         t.classList.remove('sending');
                         const cd = t.querySelector('.message-content');
                         if (cd) {
                             let h = '';
-                            if (data.image_path) {
-                                h += `<img src="${resolveFileUrl(data.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                            } else if (data.file_path) {
+                            if (data.image_path) h += `<img src="${resolveFileUrl(data.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
+                            else if (data.file_path) {
                                 const fn = data.file_name||'Файл', ext = fn.split('.').pop().toLowerCase();
-                                const isImgExt = ['jpg','jpeg','png','gif','webp','bmp'].includes(ext);
-                                if (isImgExt) {
-                                    h += `<img src="${resolveFileUrl(data.file_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                                } else {
-                                    const ico = ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
-                                    h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(data.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${data.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
-                                }
+                                const ico = ['jpg','jpeg','png','gif','webp'].includes(ext)?'#icon-image':ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
+                                h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(data.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${data.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
                             }
                             if (data.content) h += `<p style="white-space:pre-wrap;word-break:break-word;margin:${(data.file_path||data.image_path)?'6px 0 0 0':'0'};">${escapeHtml(data.content).replace(/\n/g,'<br>')}</p>`;
                             if (data.image_path||data.file_path) cd.innerHTML = h;
@@ -1948,32 +1899,6 @@ function initWebSocket() {
                 tempEl.dataset.messageId = message.id;
                 tempEl.classList.remove('sending');
                 sendingMessageId = null;
-
-                // Обновляем контент — заменяем blob/временный вид на реальный URL с сервера
-                const cd = tempEl.querySelector('.message-content');
-                if (cd) {
-                    let h = '';
-                    if (message.image_path) {
-                        h += `<img src="${resolveFileUrl(message.image_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                    } else if (message.file_path) {
-                        const fn = message.file_name || 'Файл';
-                        const ext = fn.split('.').pop().toLowerCase();
-                        const isImgExt = ['jpg','jpeg','png','gif','webp','bmp'].includes(ext);
-                        if (isImgExt) {
-                            h += `<img src="${resolveFileUrl(message.file_path)}" class="message-image" onclick="openImageModal(this.src)">`;
-                        } else {
-                            const ico = ext==='pdf'?'#icon-pdf':['zip','rar','7z'].includes(ext)?'#icon-zip':'#icon-file';
-                            h += `<div class="file-message" onclick="downloadFile('${resolveDownloadUrl(message.file_path)}','${escapeHtml(fn)}')"><span class="file-icon"><svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="${ico}"></use></svg></span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${message.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
-                        }
-                    }
-                    if (message.content) {
-                        h += `<p style="white-space:pre-wrap;word-break:break-word;margin:${(message.file_path||message.image_path)?'6px 0 0 0':'0'};">${escapeHtml(message.content).replace(/\n/g,'<br>')}</p>`;
-                    }
-                    if (message.image_path || message.file_path) cd.innerHTML = h;
-                    if (message.link_url && !cd.querySelector('.link-preview')) injectLinkPreview(cd, message);
-                    else if (message.content && !message.link_url) pollForLinkPreview(message.id, tempEl);
-                }
-
                 // Убираем спиннер
                 const rs = tempEl.querySelector('.read-status');
                 if (rs) { rs.innerHTML = `<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-check"></use></svg>`; rs.classList.remove('spinning'); }
@@ -1988,6 +1913,13 @@ function initWebSocket() {
                             ${message.content ? `<button class="message-action-btn" onclick="editMessage(${message.id}, this)" title="Редактировать"><svg width="20" height="20" viewBox="0 0 24 24"><use xlink:href="#icon-edit"></use></svg></button>` : ''}
                             <button class="message-action-btn" onclick="deleteMessage(${message.id})" title="Удалить" style="color:var(--danger);"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg></button>
                         </div>`);
+                }
+                // Превью ссылки
+                if (message.link_url) {
+                    const cd = tempEl.querySelector('.message-content');
+                    if (cd && !cd.querySelector('.link-preview')) injectLinkPreview(cd, message);
+                } else if (message.content) {
+                    pollForLinkPreview(message.id, tempEl);
                 }
             }
             return;
@@ -2117,18 +2049,11 @@ function initWebSocket() {
 
 </script>
 
-
-<!-- ════ DESKTOP: Telegram-like layout ════ -->
-<div class="tg-desktop">
-{% include '_desktop_sidebar.html' %}
-<div class="ds-chat-panel">
-
-<!-- ════ MOBILE: back button visible only on mobile ════ -->
 <div class="chat-container">
     <!-- Шапка чата -->
     <header class="chat-header">
         <div class="chat-user-info">
-            <a href="{{ url_for('chats') }}" class="btn-icon ds-back-mobile" style="background: var(--bg-tertiary); color: var(--text-primary);">
+            <a href="{{ url_for('chats') }}" class="btn-icon" style="background: var(--bg-tertiary); color: var(--text-primary);">
                 <svg width="24" height="24" viewBox="0 0 1024 1024">
                     <use xlink:href="#icon-back"></use>
                 </svg>
@@ -2453,11 +2378,6 @@ function initWebSocket() {
                     id="messageInput"
                     placeholder="Введите сообщение..."
                     autocomplete="off"
-                    autocorrect="off"
-                    autocapitalize="sentences"
-                    inputmode="text"
-                    data-lpignore="true"
-                    data-form-type="other"
                     onkeypress="if(event.keyCode === 13 && !event.shiftKey) {event.preventDefault(); sendMessage();}">
                 <button type="button" class="send-btn" onclick="sendMessage()" title="Отправить">
                     <svg width="24" height="24" viewBox="0 0 1024 1024">
@@ -2504,18 +2424,4 @@ function initWebSocket() {
         <path d="M960 512c0 119.6-46.6 232-131.2 316.6S711.6 960 592 960c-119.6 0-232-46.6-316.6-131.2S144 711.6 144 592c0-19.6 16-35.6 35.6-35.6s35.6 16 35.6 35.6c0 98.8 38.4 191.6 108.2 261.4 69.8 69.8 162.6 108.2 261.4 108.2 98.8 0 191.6-38.4 261.4-108.2 69.8-69.8 108.2-162.6 108.2-261.4 0-98.8-38.4-191.6-108.2-261.4-69.8-69.8-162.6-108.2-261.4-108.2-74.6 0-146.2 22.2-207.4 63.8l44 44c8 8 12.6 18.2 12.6 30 0 11.8-4.6 22-12.6 30-8 8-18.2 12.6-30 12.6H179.6c-11.8 0-22-4.6-30-12.6-8-8-12.6-18.2-12.6-30V234.8c0-11.8 4.6-22 12.6-30 8-8 18.2-12.6 30-12.6 11.8 0 22 4.6 30 12.6l51.6 51.6C336.2 183.2 429.2 148 528 148c119.6 0 232 46.6 316.6 131.2S960 392.4 960 512z"/>
     </symbol>
 </svg>
-</div><!-- /ds-chat-panel -->
-</div><!-- /tg-desktop -->
-
-<style>
-/* Hide back button on desktop */
-@media (min-width: 901px) { .ds-back-mobile { display: none !important; } }
-</style>
-
-<script src="{{ url_for('static', filename='js/desktop_sidebar.js') }}"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    if (window.innerWidth > 900) dsStartLiveChats();
-});
-</script>
 {% endblock %}
