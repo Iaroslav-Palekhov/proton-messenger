@@ -6,7 +6,7 @@
 ![Flask](https://img.shields.io/badge/Flask-2.3.3-green.svg)
 ![Python](https://img.shields.io/badge/Python-3.9+-yellow.svg)
 ![SQLite](https://img.shields.io/badge/SQLite-3-lightblue.svg)
-![License](https://img.shields.io/badge/license-GPL-3.0-red.svg)
+![License](https://img.shields.io/badge/license-MIT-red.svg)
 ![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
 **Современный мессенджер с групповыми чатами, файлообменником и real-time обновлениями**
