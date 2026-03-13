@@ -92,14 +92,14 @@ def get_file_icon(filename):
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
 
     icons = {
-        'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🎨', 'webp': '🖼️', 'svg': '🖼️', 'bmp': '🖼️',
-        'mp4': '🎬', 'avi': '🎬', 'mov': '🎬', 'mkv': '🎬', 'webm': '🎬',
-        'mp3': '🎵', 'wav': '🎵', 'ogg': '🎵', 'flac': '🎵', 'm4a': '🎵',
-        'pdf': '📄', 'doc': '📝', 'docx': '📝', 'txt': '📄', 'rtf': '📄',
-        'xls': '📊', 'xlsx': '📊', 'csv': '📊', 'ppt': '📊', 'pptx': '📊',
-        'zip': '📦', 'rar': '📦', '7z': '📦', 'tar': '📦', 'gz': '📦',
-        'exe': '⚙️', 'msi': '⚙️', 'sh': '⚙️', 'bat': '⚙️', 'apk': '📱',
-        'default': '📎'
+        'jpg': '[img]', 'jpeg': '[img]', 'png': '[img]', 'gif': '[img]', 'webp': '[img]', 'svg': '[img]', 'bmp': '[img]',
+        'mp4': '[video]', 'avi': '[video]', 'mov': '[video]', 'mkv': '[video]', 'webm': '[video]',
+        'mp3': '[audio]', 'wav': '[audio]', 'ogg': '[audio]', 'flac': '[audio]', 'm4a': '[audio]',
+        'pdf': '[pdf]', 'doc': '[doc]', 'docx': '[doc]', 'txt': '[txt]', 'rtf': '[txt]',
+        'xls': '[xls]', 'xlsx': '[xls]', 'csv': '[csv]', 'ppt': '[ppt]', 'pptx': '[ppt]',
+        'zip': '[zip]', 'rar': '[zip]', '7z': '[zip]', 'tar': '[zip]', 'gz': '[zip]',
+        'exe': '[exe]', 'msi': '[exe]', 'sh': '[sh]', 'bat': '[bat]', 'apk': '[apk]',
+        'default': '[file]'
     }
     return icons.get(ext, icons['default'])
 

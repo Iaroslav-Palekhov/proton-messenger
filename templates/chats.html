@@ -760,6 +760,16 @@
                 Безопасность
             </a>
 
+            <a href="{{ url_for('contacts') }}" class="drawer-menu-item">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+                Контакты
+            </a>
+
             <div class="drawer-divider"></div>
 
             <a href="{{ url_for('logout') }}" class="drawer-menu-item" style="color: var(--danger, #e53e3e);">
@@ -1117,13 +1127,80 @@
     }
 
     /* ===== ПОИСК ===== */
+    let _searchTimeout = null;
     document.getElementById('searchInput').addEventListener('input', function(e) {
-        const q = e.target.value.toLowerCase();
+        clearTimeout(_searchTimeout);
+        const q = e.target.value.trim();
+
+        // Если поле пустое — показываем все чаты, скрываем результаты поиска
+        if (!q) {
+            document.querySelectorAll('.chat-item-wrapper').forEach(w => w.style.display = 'flex');
+            const sr = document.getElementById('searchResultsSection');
+            if (sr) sr.remove();
+            return;
+        }
+
+        // Сначала фильтруем существующие чаты
+        let localMatch = false;
         document.querySelectorAll('.chat-item-wrapper').forEach(w => {
             const title = w.querySelector('h3').textContent.toLowerCase();
-            w.style.display = title.includes(q) ? 'flex' : 'none';
+            const matches = title.includes(q.toLowerCase());
+            w.style.display = matches ? 'flex' : 'none';
+            if (matches) localMatch = true;
         });
+
+        // Ищем пользователей через API
+        _searchTimeout = setTimeout(() => {
+            fetch(`/api/search_users?q=${encodeURIComponent(q)}`)
+                .then(r => r.json())
+                .then(data => {
+                    let section = document.getElementById('searchResultsSection');
+                    if (!section) {
+                        section = document.createElement('div');
+                        section.id = 'searchResultsSection';
+                        section.style.cssText = 'padding: 8px 15px 0;';
+                        document.getElementById('chatsList').prepend(section);
+                    }
+                    if (!data.users || data.users.length === 0) {
+                        section.innerHTML = '';
+                        return;
+                    }
+                    section.innerHTML = `
+                        <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:4px 0 8px;">Пользователи</div>
+                        ${data.users.map(u => `
+                            <div class="chat-item-wrapper" style="margin-bottom:8px;">
+                                <a href="${u.profile_url}" class="chat-item" style="text-decoration:none;color:inherit;">
+                                    <div class="chat-avatar">
+                                        <img src="${u.avatar}" alt="" onerror="this.src='/static/uploads/avatars/default.png'">
+                                        <span class="status ${u.status}"></span>
+                                    </div>
+                                    <div class="chat-info">
+                                        <div class="chat-header">
+                                            <h3>${u.username}</h3>
+                                            <span class="chat-time">${u.status === 'online' ? 'Онлайн' : ''}</span>
+                                        </div>
+                                        <div class="chat-preview">
+                                            <p style="color:var(--text-muted);">Нажмите чтобы открыть профиль</p>
+                                        </div>
+                                    </div>
+                                </a>
+                                <button class="delete-chat-btn" style="color:var(--accent);"
+                                        onclick="event.preventDefault();event.stopPropagation();startChatFromSearch('${u.username}')"
+                                        title="Написать">
+                                    <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-chat"></use></svg>
+                                </button>
+                            </div>
+                        `).join('')}
+                        <div style="height:8px;"></div>
+                    `;
+                })
+                .catch(() => {});
+        }, 250);
     });
+
+    function startChatFromSearch(username) {
+        window.location.href = `/start_chat?username=${encodeURIComponent(username)}`;
+    }
 
     /* ===== УВЕДОМЛЕНИЯ ===== */
     function showNotification(message, type = 'success') {
@@ -1145,12 +1222,9 @@
     }
 
     /* ===== АВТООБНОВЛЕНИЕ ЧАТОВ через WebSocket ===== */
-    let refreshInterval = null;
-
     function startAutoRefresh() {
-        // Подключаем WebSocket для обновления списка чатов
         const socket = io({
-            transports: ['websocket', 'polling'],
+            transports: ['websocket'],
             reconnectionDelay: 1000,
         });
         window._chatsSocket = socket;
@@ -1160,18 +1234,14 @@
             socket.emit('heartbeat');
         });
 
-        // Новое сообщение в каком-то чате — обновляем список
+        // Новое сообщение — обновляем список
         socket.on('chat_updated', (data) => {
-            // Быстрое обновление — просто перезагружаем список
             fetchChatsList();
         });
 
-        // Fallback: если WS не работает — polling каждые 5 сек (было 1 сек)
-        socket.on('disconnect', () => {
-            if (!refreshInterval) refreshInterval = setInterval(fetchChatsList, 5000);
-        });
+        // При переподключении тоже обновляем
         socket.on('reconnect', () => {
-            if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+            fetchChatsList();
         });
 
         // Первоначальная загрузка

@@ -15,6 +15,7 @@ class User(UserMixin, db.Model):
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     push_token = db.Column(db.String(200), default=None, nullable=True)
+    ntfy_server = db.Column(db.String(500), default=None, nullable=True)
 
     messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy=True)
     messages_received = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver', lazy=True)
@@ -179,6 +180,19 @@ class UserSession(db.Model):
             return "вчера"
         else:
             return self.last_active.strftime('%d.%m.%Y %H:%M')
+
+
+class Contact(db.Model):
+    """Контакты пользователя."""
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    contact_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    owner = db.relationship('User', foreign_keys=[owner_id], backref=db.backref('contacts', lazy=True))
+    contact_user = db.relationship('User', foreign_keys=[contact_id])
+
+    __table_args__ = (db.UniqueConstraint('owner_id', 'contact_id', name='unique_contact'),)
 
 
 class BlockedUser(db.Model):

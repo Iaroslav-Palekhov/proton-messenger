@@ -32,11 +32,15 @@ class Config:
 
     # Оптимизация SQLAlchemy connection pool
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,       # Проверяем соединение перед использованием
-        'pool_recycle': 280,         # Переиспользуем соединения каждые 280 сек
-        'pool_size': 10,             # Размер пула
-        'max_overflow': 5,           # Дополнительные соединения при пике
+        'pool_pre_ping': True,
+        'pool_recycle': 280,
+        'pool_size': 10,
+        'max_overflow': 5,
+        'connect_args': {'check_same_thread': False},
     }
+
+    # Кэширование статических файлов (30 дней)
+    SEND_FILE_MAX_AGE_DEFAULT = 60 * 60 * 24 * 30
 
     # Загрузка файлов
     UPLOAD_FOLDER = 'static/uploads'
@@ -68,6 +72,9 @@ class Config:
     ]
     COMPRESS_LEVEL = 6        # Баланс скорость/размер (1-9)
     COMPRESS_MIN_SIZE = 500   # Сжимаем только если > 500 байт
+
+    # Push-уведомления (ntfy)
+    NTFY_SERVER = os.environ.get('NTFY_SERVER', 'https://ntfy.sh')
 
     # Продакшен: раскомментируй при HTTPS:
     # SESSION_COOKIE_SECURE = True

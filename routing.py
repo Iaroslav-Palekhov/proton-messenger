@@ -4,12 +4,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
+from sqlalchemy import text as sa_text
 import os
 import mimetypes
 import secrets
 import threading
+import zipfile
+import io
+import shutil
 
-from models import User, Group, GroupMember, Chat, Message, ForwardedMessage, PasswordReset, UserSession, BlockedUser
+from models import User, Group, GroupMember, Chat, Message, ForwardedMessage, PasswordReset, UserSession, BlockedUser, Contact
 from socketio_events import socketio
 from utils import (
     compress_image, get_file_category, get_file_icon,
@@ -18,6 +22,15 @@ from utils import (
 )
 
 def register_routes(app, db, login_manager):
+
+    @app.after_request
+    def add_cache_headers(response):
+        """Кэшируем статику на 30 дней, HTML не кэшируем."""
+        if request.path.startswith('/static/'):
+            response.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
+        elif response.content_type and 'text/html' in response.content_type:
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return response
 
     # ============================================================
     # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СЕССИЙ
@@ -210,6 +223,16 @@ def register_routes(app, db, login_manager):
                 session['session_token'] = tok
                 new_sess = _create_session_record(user.id, tok, is_current=True)
 
+                # ── ntfy уведомление о новом входе ──
+                try:
+                    if user.push_token:
+                        from ntfy_notifications import notify_new_login
+                        device_str = f"{new_sess.browser or 'Браузер'} · {new_sess.os or 'ОС неизвестна'}"
+                        ntfy_server = user.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
+                        notify_new_login(user, new_sess.ip_address or '?', device_str, server=ntfy_server)
+                except Exception:
+                    pass
+
                 return redirect(url_for('chats'))
             else:
                 session[fail_key] = fails + 1
@@ -240,54 +263,81 @@ def register_routes(app, db, login_manager):
     @app.route('/chats')
     @login_required
     def chats():
+        # Личные чаты — один запрос с joinedload
         user_chats = Chat.query.filter(
             (Chat.user1_id == current_user.id) | (Chat.user2_id == current_user.id)
-        ).order_by(Chat.last_message_at.desc()).all()
+        ).options(joinedload(Chat.user1), joinedload(Chat.user2)).order_by(Chat.last_message_at.desc()).all()
+
+        chat_ids = [c.id for c in user_chats]
+        if chat_ids:
+            last_msg_subq = db.session.query(
+                Message.chat_id, func.max(Message.id).label('max_id')
+            ).filter(Message.chat_id.in_(chat_ids)).group_by(Message.chat_id).subquery()
+            last_msgs = {m.chat_id: m for m in Message.query.join(
+                last_msg_subq, Message.id == last_msg_subq.c.max_id).all()}
+            unread_rows = db.session.query(
+                Message.chat_id, func.count(Message.id)
+            ).filter(
+                Message.chat_id.in_(chat_ids),
+                Message.receiver_id == current_user.id,
+                Message.is_read == False
+            ).group_by(Message.chat_id).all()
+            unread_map = {r[0]: r[1] for r in unread_rows}
+        else:
+            last_msgs = {}; unread_map = {}
 
         chats_data = []
-        for chat in user_chats:
-            other_user   = chat.user2 if chat.user1_id == current_user.id else chat.user1
-            last_message = Message.query.filter_by(chat_id=chat.id).order_by(Message.timestamp.desc()).first()
-            unread_count = Message.query.filter_by(
-                chat_id=chat.id,
-                receiver_id=current_user.id,
-                is_read=False
-            ).count()
-
+        for c in user_chats:
             chats_data.append({
-                'id': chat.id,
-                'type': 'private',
-                'other_user': other_user,
-                'last_message': last_message,
-                'unread_count': unread_count,
-                'last_message_time': chat.last_message_at
+                'id': c.id, 'type': 'private',
+                'other_user': c.user2 if c.user1_id == current_user.id else c.user1,
+                'last_message': last_msgs.get(c.id),
+                'unread_count': unread_map.get(c.id, 0),
+                'last_message_time': c.last_message_at
             })
 
-        user_groups = GroupMember.query.filter_by(user_id=current_user.id).all()
-        for membership in user_groups:
-            group        = membership.group
-            last_message = Message.query.filter_by(group_id=group.id).order_by(Message.timestamp.desc()).first()
-            unread_count = Message.query.filter_by(
-                group_id=group.id,
-                is_read=False
-            ).filter(Message.sender_id != current_user.id).count()
+        # Группы — один запрос с joinedload
+        user_groups = GroupMember.query.filter_by(user_id=current_user.id).options(
+            joinedload(GroupMember.group)
+        ).all()
+        group_ids = [m.group.id for m in user_groups if m.group]
+        if group_ids:
+            last_gsubq = db.session.query(
+                Message.group_id, func.max(Message.id).label('max_id')
+            ).filter(Message.group_id.in_(group_ids)).group_by(Message.group_id).subquery()
+            last_gmsgs = {m.group_id: m for m in Message.query.join(
+                last_gsubq, Message.id == last_gsubq.c.max_id).all()}
+            unread_grows = db.session.query(
+                Message.group_id, func.count(Message.id)
+            ).filter(
+                Message.group_id.in_(group_ids),
+                Message.is_read == False,
+                Message.sender_id != current_user.id
+            ).group_by(Message.group_id).all()
+            unread_gmap = {r[0]: r[1] for r in unread_grows}
+        else:
+            last_gmsgs = {}; unread_gmap = {}
 
+        for m in user_groups:
+            g = m.group
+            if not g: continue
             chats_data.append({
-                'id': group.id,
-                'type': 'group',
-                'group': group,
-                'last_message': last_message,
-                'unread_count': unread_count,
-                'last_message_time': group.last_message_at
+                'id': g.id, 'type': 'group', 'group': g,
+                'last_message': last_gmsgs.get(g.id),
+                'unread_count': unread_gmap.get(g.id, 0),
+                'last_message_time': g.last_message_at
             })
 
         chats_data.sort(key=lambda x: x['last_message_time'], reverse=True)
         return render_template('chats.html', chats=chats_data)
 
-    @app.route('/start_chat', methods=['POST'])
+    @app.route('/start_chat', methods=['GET', 'POST'])
     @login_required
     def start_chat():
-        username = request.form.get('username')
+        if request.method == 'GET':
+            username = request.args.get('username')
+        else:
+            username = request.form.get('username')
 
         if not username or username == current_user.username:
             return redirect(url_for('chats'))
@@ -321,31 +371,33 @@ def register_routes(app, db, login_manager):
         if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
             return redirect(url_for('chats'))
 
-        messages   = Message.query.filter_by(chat_id=chat_id, is_deleted=False).order_by(Message.timestamp).all()
         other_user = chat_obj.user2 if chat_obj.user1_id == current_user.id else chat_obj.user1
 
-        unread_messages = Message.query.filter_by(
-            chat_id=chat_id,
-            receiver_id=current_user.id,
-            is_read=False
-        ).all()
+        # Только последние 50 сообщений — остальные грузятся lazy через get_messages
+        messages = Message.query.filter_by(chat_id=chat_id, is_deleted=False).options(
+            joinedload(Message.sender), joinedload(Message.reply_to)
+        ).order_by(Message.timestamp.desc()).limit(50).all()
+        messages = list(reversed(messages))
 
-        for msg in unread_messages:
-            msg.is_read = True
-
+        # Помечаем прочитанными одним UPDATE
+        db.session.query(Message).filter(
+            Message.chat_id == chat_id,
+            Message.receiver_id == current_user.id,
+            Message.is_read == False
+        ).update({'is_read': True}, synchronize_session=False)
         db.session.commit()
 
+        # Закреплённые — без N+1
         pinned_messages_raw = Message.query.filter_by(
             chat_id=chat_id, is_pinned=True, is_deleted=False
-        ).order_by(Message.pinned_at.desc()).all()
+        ).options(joinedload(Message.sender)).order_by(Message.pinned_at.desc()).all()
 
         pinned_messages = []
         for msg in pinned_messages_raw:
-            sender = User.query.get(msg.sender_id)
             pinned_messages.append({
                 'id': msg.id,
                 'content': msg.content,
-                'sender_name': sender.username if sender else 'Unknown',
+                'sender_name': msg.sender.username if msg.sender else 'Unknown',
                 'timestamp': msg.timestamp.strftime('%d.%m.%Y %H:%M'),
                 'has_image': bool(msg.image_path),
                 'has_file': bool(msg.file_path),
@@ -410,9 +462,9 @@ def register_routes(app, db, login_manager):
                     prefix = 'Вы: ' if last_message.sender_id == current_user.id else ''
                     last_message_preview = f"{prefix}{last_message.content[:30]}"
                 elif last_message.image_path:
-                    last_message_preview = '📷 Фото'
+                    last_message_preview = '[Фото]'
                 elif last_message.file_path:
-                    last_message_preview = f'📎 {last_message.file_name[:20] if last_message.file_name else "Файл"}'
+                    last_message_preview = f'[Файл] {last_message.file_name[:20] if last_message.file_name else "Файл"}'
             else:
                 last_message_preview = 'Нет сообщений'
 
@@ -447,9 +499,9 @@ def register_routes(app, db, login_manager):
                     prefix = 'Вы: ' if last_message.sender_id == current_user.id else f'{last_message.sender.username if last_message.sender else "Пользователь"}: '
                     last_message_preview = f"{prefix}{last_message.content[:30]}"
                 elif last_message.image_path:
-                    last_message_preview = '📷 Фото'
+                    last_message_preview = '[Фото]'
                 elif last_message.file_path:
-                    last_message_preview = f'📎 {last_message.file_name[:20] if last_message.file_name else "Файл"}'
+                    last_message_preview = f'[Файл] {last_message.file_name[:20] if last_message.file_name else "Файл"}'
             else:
                 last_message_preview = 'Нет сообщений'
 
@@ -483,13 +535,18 @@ def register_routes(app, db, login_manager):
         user = User.query.get_or_404(user_id)
 
         is_blocked = False
+        is_contact = False
         if user.id != current_user.id:
             is_blocked = BlockedUser.query.filter_by(
                 blocker_id=current_user.id,
                 blocked_id=user.id
             ).first() is not None
+            is_contact = Contact.query.filter_by(
+                owner_id=current_user.id,
+                contact_id=user.id
+            ).first() is not None
 
-        return render_template('profile.html', profile_user=user, is_blocked=is_blocked)
+        return render_template('profile.html', profile_user=user, is_blocked=is_blocked, is_contact=is_contact)
 
     @app.route('/profile/edit', methods=['GET', 'POST'])
     @login_required
@@ -600,11 +657,24 @@ def register_routes(app, db, login_manager):
             if s.is_current:
                 current_sess = s
 
-        # Нельзя завершать другие сессии, если текущая сессия моложе 24 часов
+        # account_too_new — текущая сессия моложе 24 часов
         account_too_new = False
         if current_sess:
             age = datetime.utcnow() - current_sess.created_at
             account_too_new = age < timedelta(hours=24)
+
+        # Для каждой сессии определяем, заблокирована ли кнопка завершения.
+        # Если текущая сессия новая (< 24ч), блокируем только те устройства,
+        # которые тоже зашли меньше 24 часов назад.
+        # Устройства старше 24ч всегда можно завершить (они уже "отсидели").
+        for s in sessions:
+            if s.is_current:
+                s.terminate_locked = False
+            elif account_too_new:
+                sess_age = datetime.utcnow() - s.created_at
+                s.terminate_locked = sess_age < timedelta(hours=24)
+            else:
+                s.terminate_locked = False
 
         return render_template('devices.html', sessions=sessions, account_too_new=account_too_new)
 
@@ -620,10 +690,13 @@ def register_routes(app, db, login_manager):
         if sess.session_token == current_token:
             return jsonify({'error': 'Нельзя завершить текущую сессию. Используйте «Выйти».'}), 400
 
-        # Проверяем возраст текущей сессии
+        # Если текущая сессия новее 24 часов — проверяем возраст завершаемой сессии.
+        # Завершать можно только те устройства, которые сами старше 24 часов (уже "отсидели").
         age_seconds = _current_session_age()
-        if age_seconds is not None and age_seconds < 86400:  # 24 часа
-            return jsonify({'error': 'Управление устройствами доступно через 24 ч. после входа'}), 403
+        if age_seconds is not None and age_seconds < 86400:  # текущая сессия моложе 24ч
+            target_age = (datetime.utcnow() - sess.created_at).total_seconds()
+            if target_age < 86400:  # завершаемая тоже моложе 24ч — блокируем
+                return jsonify({'error': 'Управление устройствами доступно через 24 ч. после входа'}), 403
 
         sess.end_session()
         db.session.commit()
@@ -701,8 +774,130 @@ def register_routes(app, db, login_manager):
         return jsonify({'success': True})
 
     # ============================================================
+    # КОНТАКТЫ
+    # ============================================================
+
+    @app.route('/contacts')
+    @login_required
+    def contacts():
+        user_contacts = Contact.query.filter_by(owner_id=current_user.id)\
+            .order_by(Contact.created_at.desc()).all()
+        return render_template('contacts.html', contacts=user_contacts)
+
+    @app.route('/contacts/add/<int:user_id>', methods=['POST'])
+    @login_required
+    def add_contact(user_id):
+        if user_id == current_user.id:
+            return jsonify({'error': 'Нельзя добавить себя в контакты'}), 400
+        User.query.get_or_404(user_id)
+        existing = Contact.query.filter_by(owner_id=current_user.id, contact_id=user_id).first()
+        if existing:
+            return jsonify({'error': 'Уже в контактах'}), 400
+        contact = Contact(owner_id=current_user.id, contact_id=user_id)
+        db.session.add(contact)
+        db.session.commit()
+        return jsonify({'success': True})
+
+    @app.route('/contacts/remove/<int:user_id>', methods=['POST'])
+    @login_required
+    def remove_contact(user_id):
+        contact = Contact.query.filter_by(owner_id=current_user.id, contact_id=user_id).first()
+        if not contact:
+            return jsonify({'error': 'Не найдено в контактах'}), 404
+        db.session.delete(contact)
+        db.session.commit()
+        return jsonify({'success': True})
+
+    @app.route('/api/search_users')
+    @login_required
+    def search_users():
+        q = request.args.get('q', '').strip()
+        if len(q) < 1:
+            return jsonify({'users': []})
+        users = User.query.filter(
+            User.username.ilike(f'%{q}%'),
+            User.id != current_user.id
+        ).limit(20).all()
+        result = []
+        for u in users:
+            is_contact = Contact.query.filter_by(owner_id=current_user.id, contact_id=u.id).first() is not None
+            result.append({
+                'id': u.id,
+                'username': u.username,
+                'avatar': f'/static/uploads/{u.avatar}',
+                'status': u.status,
+                'is_contact': is_contact,
+                'profile_url': url_for('profile', user_id=u.id),
+            })
+        return jsonify({'users': result})
+
+    # ============================================================
     # PUSH УВЕДОМЛЕНИЯ — СОХРАНИТЬ ТОКЕН
     # ============================================================
+
+    @app.route('/security/notifications')
+    @login_required
+    def security_notifications():
+        """Страница настройки ntfy push-уведомлений."""
+        # ntfy_server хранится в БД
+        ntfy_server = current_user.ntfy_server or ''
+        return render_template('notifications.html', ntfy_server=ntfy_server)
+
+    @app.route('/security/notifications/save', methods=['POST'])
+    @login_required
+    def save_ntfy_settings():
+        """Сохраняет ntfy-топик и (опционально) URL сервера."""
+        topic  = (request.form.get('topic') or '').strip()
+        server = (request.form.get('server') or '').strip()
+
+        if not topic:
+            return jsonify({'error': 'Укажите топик'}), 400
+
+        # Базовая валидация: только безопасные символы
+        import re
+        if not re.match(r'^[A-Za-z0-9_\-]{1,200}$', topic):
+            return jsonify({'error': 'Топик может содержать только буквы, цифры, _ и -'}), 400
+
+        current_user.push_token = topic
+
+        # Сервер теперь хранится в БД
+        current_user.ntfy_server = server if server else None
+        db.session.commit()
+
+        return jsonify({'success': True})
+
+    @app.route('/security/notifications/test', methods=['POST'])
+    @login_required
+    def test_ntfy_notification():
+        """Отправляет тестовое ntfy-уведомление."""
+        topic  = (request.form.get('topic') or '').strip()
+        server = (request.form.get('server') or '').strip() or 'https://ntfy.sh'
+
+        if not topic:
+            return jsonify({'error': 'Укажите топик'}), 400
+
+        try:
+            from ntfy_notifications import send_notification
+            send_notification(
+                topic=topic,
+                title='[!] Тестовое уведомление',
+                message='Push-уведомления настроены и работают корректно!',
+                priority=3,
+                server=server,
+            )
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/security/notifications/remove', methods=['POST'])
+    @login_required
+    def remove_ntfy_settings():
+        """Отключает push-уведомления."""
+        current_user.push_token = None
+        current_user.ntfy_server = None
+        db.session.commit()
+        session.pop('ntfy_server', None)
+        return jsonify({'success': True})
 
     # ============================================================
     # ГРУППЫ
@@ -785,29 +980,31 @@ def register_routes(app, db, login_manager):
         if not membership:
             return redirect(url_for('groups'))
 
-        messages = Message.query.filter_by(group_id=group_id, is_deleted=False).order_by(Message.timestamp).all()
+        # Только последние 50 сообщений
+        messages = Message.query.filter_by(group_id=group_id, is_deleted=False).options(
+            joinedload(Message.sender), joinedload(Message.reply_to)
+        ).order_by(Message.timestamp.desc()).limit(50).all()
+        messages = list(reversed(messages))
 
-        unread_messages = Message.query.filter_by(
-            group_id=group_id,
-            is_read=False
-        ).filter(Message.sender_id != current_user.id).all()
-
-        for msg in unread_messages:
-            msg.is_read = True
-
+        # Помечаем прочитанными одним UPDATE
+        db.session.query(Message).filter(
+            Message.group_id == group_id,
+            Message.sender_id != current_user.id,
+            Message.is_read == False
+        ).update({'is_read': True}, synchronize_session=False)
         db.session.commit()
 
+        # Закреплённые — без N+1
         pinned_messages_raw = Message.query.filter_by(
             group_id=group_id, is_pinned=True, is_deleted=False
-        ).order_by(Message.pinned_at.desc()).all()
+        ).options(joinedload(Message.sender)).order_by(Message.pinned_at.desc()).all()
 
         pinned_messages = []
         for msg in pinned_messages_raw:
-            sender = User.query.get(msg.sender_id)
             pinned_messages.append({
                 'id': msg.id,
                 'content': msg.content,
-                'sender_name': sender.username if sender else 'Unknown',
+                'sender_name': msg.sender.username if msg.sender else 'Unknown',
                 'timestamp': msg.timestamp.strftime('%d.%m.%Y %H:%M'),
                 'has_image': bool(msg.image_path),
                 'has_file': bool(msg.file_path),
@@ -1108,6 +1305,36 @@ def register_routes(app, db, login_manager):
                 )
                 t.start()
 
+        # ntfy push-уведомления для всех сообщений (текст, файлы, картинки)
+        try:
+            from ntfy_notifications import notify_new_message, notify_group_message
+            preview = message.content[:60] if message.content else (
+                '[Фото]' if message.image_path else f'[Файл] {message.file_name or "Файл"}'
+            )
+            if message.chat_id and message.receiver_id:
+                from models import User as _User
+                recipient = _User.query.get(message.receiver_id)
+                if recipient and recipient.push_token:
+                    ntfy_server = recipient.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
+                    notify_new_message(recipient, current_user.username, preview, server=ntfy_server)
+            elif message.group_id:
+                from models import GroupMember as _GM, Group as _Group, User as _User
+                group = _Group.query.get(message.group_id)
+                members = _GM.query.filter_by(group_id=message.group_id).all()
+                for m in members:
+                    if m.user_id == current_user.id:
+                        continue
+                    member_user = _User.query.get(m.user_id)
+                    if member_user and member_user.push_token:
+                        ntfy_server = member_user.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
+                        notify_group_message(
+                            member_user, current_user.username,
+                            group.name if group else 'Группа',
+                            preview, server=ntfy_server
+                        )
+        except Exception:
+            pass  # ntfy не должен ломать отправку сообщения
+
         # Эмитим WS-событие new_message чтобы получатель увидел файл/изображение мгновенно
         if file and file.filename:
             try:
@@ -1344,7 +1571,7 @@ def register_routes(app, db, login_manager):
                 file_url = url_for('download_file', filepath=msg.image_path)
 
             file_size_formatted = format_file_size(msg.file_size) if msg.file_size else None
-            file_icon           = get_file_icon(msg.file_name) if msg.file_name else '📎'
+            file_icon           = get_file_icon(msg.file_name) if msg.file_name else '[file]'
 
             reply_to_data = None
             if msg.reply_to:
@@ -1598,6 +1825,220 @@ def register_routes(app, db, login_manager):
         return jsonify(result)
 
     # ============================================================
+    # ЭКСПОРТ ЧАТА
+    # ============================================================
+
+    @app.route('/export_chat/<int:context_id>')
+    @login_required
+    def export_chat(context_id):
+        """Экспорт истории чата в ZIP (HTML + вложения). Только для ПК."""
+        is_group = request.args.get('is_group', False, type=bool)
+
+        # Проверяем доступ и собираем метаданные
+        if is_group:
+            group = Group.query.get_or_404(context_id)
+            membership = GroupMember.query.filter_by(
+                group_id=context_id, user_id=current_user.id
+            ).first()
+            if not membership:
+                return jsonify({'error': 'Нет доступа'}), 403
+            chat_title = group.name
+            chat_subtitle = f'{len(group.members)} участников'
+            messages = Message.query.filter(
+                Message.group_id == context_id,
+                Message.is_deleted == False
+            ).options(
+                joinedload(Message.sender),
+                joinedload(Message.reply_to)
+            ).order_by(Message.timestamp).all()
+        else:
+            chat_obj = Chat.query.get_or_404(context_id)
+            if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
+                return jsonify({'error': 'Нет доступа'}), 403
+            other = chat_obj.user2 if chat_obj.user1_id == current_user.id else chat_obj.user1
+            chat_title = other.username
+            chat_subtitle = 'Личный чат'
+            messages = Message.query.filter(
+                Message.chat_id == context_id,
+                Message.is_deleted == False
+            ).options(
+                joinedload(Message.sender),
+                joinedload(Message.reply_to)
+            ).order_by(Message.timestamp).all()
+
+        upload_folder = app.config.get('UPLOAD_FOLDER', 'static/uploads')
+
+        # Список вложений для копирования в архив
+        attachments = {}  # original_path -> archive_path
+        for msg in messages:
+            for fpath in [msg.image_path, msg.file_path]:
+                if fpath and fpath not in attachments:
+                    full = os.path.join(upload_folder, fpath)
+                    if os.path.exists(full):
+                        attachments[fpath] = f'files/{fpath}'
+
+        # Читаем CSS для вставки в HTML
+        css_path = os.path.join(app.static_folder, 'css', 'style.css')
+        try:
+            with open(css_path, 'r', encoding='utf-8') as f:
+                base_css = f.read()
+        except Exception:
+            base_css = ''
+
+        # Группируем сообщения по дате
+        from itertools import groupby
+        def date_key(m):
+            return m.timestamp.strftime('%d %B %Y')
+
+        # Генерируем HTML
+        html_lines = []
+        html_lines.append('<!DOCTYPE html>')
+        html_lines.append('<html lang="ru"><head><meta charset="utf-8">')
+        html_lines.append(f'<title>Экспорт: {chat_title}</title>')
+        html_lines.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
+        html_lines.append('<style>')
+        # Минимальный встроенный стиль — не тащим весь style.css
+        html_lines.append('''
+:root {
+  --bg: #1a1a2e; --bg2: #16213e; --bg3: #0f3460;
+  --text: #e0e0e0; --text2: #a0a0b0; --accent: #4f8ef7;
+  --border: #2a2a4a; --bubble-me: #1e3a6e; --bubble-other: #1e1e3a;
+  --radius: 12px; --danger: #e74c3c;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.5; }
+.export-header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 20px 32px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
+.export-header h1 { font-size: 20px; font-weight: 700; }
+.export-header p { color: var(--text2); font-size: 13px; margin-top: 2px; }
+.export-meta { margin-left: auto; color: var(--text2); font-size: 13px; text-align: right; }
+.messages-wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+.date-divider { text-align: center; margin: 24px 0 12px; }
+.date-divider span { background: var(--bg3); color: var(--text2); font-size: 12px; padding: 4px 14px; border-radius: 20px; }
+.msg-row { display: flex; gap: 10px; margin-bottom: 6px; align-items: flex-end; }
+.msg-row.me { flex-direction: row-reverse; }
+.avatar-sm { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.bubble { max-width: 68%; background: var(--bubble-other); border-radius: var(--radius); padding: 8px 12px; word-break: break-word; }
+.me .bubble { background: var(--bubble-me); }
+.sender-name { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+.msg-text { white-space: pre-wrap; }
+.msg-time { font-size: 11px; color: var(--text2); margin-top: 4px; text-align: right; }
+.msg-img { max-width: 320px; max-height: 320px; border-radius: 8px; display: block; margin-top: 6px; }
+.msg-file { display: inline-flex; align-items: center; gap: 8px; background: var(--bg3); border-radius: 8px; padding: 8px 12px; margin-top: 6px; color: var(--text); text-decoration: none; font-size: 13px; }
+.msg-file:hover { opacity: .8; }
+.reply-block { border-left: 3px solid var(--accent); padding: 4px 8px; margin-bottom: 6px; font-size: 12px; color: var(--text2); border-radius: 0 6px 6px 0; background: rgba(79,142,247,.08); }
+.reply-block b { color: var(--accent); }
+.fwd-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-style: italic; }
+.system-msg { text-align: center; color: var(--text2); font-size: 12px; margin: 8px 0; }
+''')
+        html_lines.append('</style></head><body>')
+
+        # Шапка
+        export_time = datetime.utcnow().strftime('%d.%m.%Y %H:%M UTC')
+        html_lines.append(f'''
+<div class="export-header">
+  <div>
+    <h1>{chat_title}</h1>
+    <p>{chat_subtitle}</p>
+  </div>
+  <div class="export-meta">
+    <div>Сообщений: {len(messages)}</div>
+    <div>Экспорт: {export_time}</div>
+  </div>
+</div>
+<div class="messages-wrap">
+''')
+
+        current_date = None
+        for msg in messages:
+            msg_date = msg.timestamp.strftime('%d %B %Y')
+            if msg_date != current_date:
+                current_date = msg_date
+                html_lines.append(f'<div class="date-divider"><span>{msg_date}</span></div>')
+
+            is_me = msg.sender_id == current_user.id
+            row_class = 'msg-row me' if is_me else 'msg-row'
+            sender = msg.sender
+            sender_name = sender.username if sender else 'Unknown'
+            time_str = msg.timestamp.strftime('%H:%M')
+
+            # Аватар
+            if sender and sender.avatar:
+                avatar_src = f'files/{sender.avatar}' if sender.avatar in attachments else f'https://ui-avatars.com/api/?name={sender_name}&size=32&background=4f8ef7&color=fff'
+            else:
+                avatar_src = f'https://ui-avatars.com/api/?name={sender_name}&size=32&background=4f8ef7&color=fff'
+
+            html_lines.append(f'<div class="{row_class}">')
+            html_lines.append(f'<img class="avatar-sm" src="{avatar_src}" alt="{sender_name}">')
+            html_lines.append('<div class="bubble">')
+
+            # Имя отправителя (в группах всегда, в личных — только у собеседника)
+            if is_group or not is_me:
+                html_lines.append(f'<div class="sender-name">{sender_name}</div>')
+
+            # Пересылка
+            if msg.is_forwarded and msg.forwarded_from:
+                orig_sender = msg.forwarded_from.sender
+                orig_name = orig_sender.username if orig_sender else 'Unknown'
+                html_lines.append(f'<div class="fwd-label">Переслано от {orig_name}</div>')
+
+            # Цитата
+            if msg.reply_to and not msg.reply_to.is_deleted:
+                r = msg.reply_to
+                r_sender = r.sender
+                r_name = r_sender.username if r_sender else 'Unknown'
+                r_text = r.content[:80] if r.content else ('[Фото]' if r.image_path else '[Файл]')
+                html_lines.append(f'<div class="reply-block"><b>{r_name}:</b> {r_text}</div>')
+
+            # Картинка
+            if msg.image_path:
+                img_src = attachments.get(msg.image_path, f'files/{msg.image_path}')
+                html_lines.append(f'<img class="msg-img" src="{img_src}" alt="Фото">')
+
+            # Файл
+            if msg.file_path:
+                file_href = attachments.get(msg.file_path, f'files/{msg.file_path}')
+                fname = msg.file_name or 'Файл'
+                fsize = format_file_size(msg.file_size) if msg.file_size else ''
+                html_lines.append(f'<a class="msg-file" href="{file_href}" download="{fname}">[file] {fname} {fsize}</a>')
+
+            # Текст
+            if msg.content:
+                import html as html_mod
+                safe_text = html_mod.escape(msg.content)
+                html_lines.append(f'<div class="msg-text">{safe_text}</div>')
+
+            html_lines.append(f'<div class="msg-time">{time_str}</div>')
+            html_lines.append('</div></div>')  # bubble, msg-row
+
+        html_lines.append('</div></body></html>')
+        html_content = '\n'.join(html_lines)
+
+        # Собираем ZIP в памяти
+        zip_buffer = io.BytesIO()
+        safe_title = ''.join(c for c in chat_title if c.isalnum() or c in '_ -')[:40]
+        html_filename = f'chat_{safe_title}.html'
+
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(html_filename, html_content.encode('utf-8'))
+            for orig_path, arc_path in attachments.items():
+                full = os.path.join(upload_folder, orig_path)
+                try:
+                    zf.write(full, arc_path)
+                except Exception:
+                    pass
+
+        zip_buffer.seek(0)
+        zip_name = f'export_{safe_title}.zip'
+
+        from flask import send_file
+        return send_file(
+            zip_buffer,
+            as_attachment=True,
+            download_name=zip_name,
+            mimetype='application/zip'
+        )
+
+    # ============================================================
     # ВОССТАНОВЛЕНИЕ ПАРОЛЯ
     # ============================================================
 
@@ -1726,7 +2167,7 @@ def register_routes(app, db, login_manager):
                     'url': url_for('download_file', filepath=msg.file_path),
                     'file_name': msg.file_name,
                     'file_size': format_file_size(msg.file_size) if msg.file_size else None,
-                    'file_icon': get_file_icon(msg.file_name) if msg.file_name else '📎',
+                    'file_icon': get_file_icon(msg.file_name) if msg.file_name else '[file]',
                     'sender_name': sender.username if sender else 'Unknown',
                     'timestamp': msg.timestamp.strftime('%d.%m.%Y %H:%M')
                 })

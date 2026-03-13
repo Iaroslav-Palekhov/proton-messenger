@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+
+{% block title %}Уведомления — Мессенджер{% endblock %}
+
+{% block content %}
+<style>
+    .app-container, .sidebar, .main-content { display: none; }
+
+    .sec-page {
+        min-height: 100vh;
+        background: var(--bg-primary);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .sec-card {
+        background: var(--bg-secondary);
+        width: 100%;
+        max-width: 560px;
+        min-height: 100vh;
+    }
+
+    .sec-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: var(--bg-secondary);
+        z-index: 10;
+    }
+
+    .back-btn {
+        width: 40px; height: 40px;
+        border-radius: 50%;
+        background: transparent; border: none;
+        color: var(--text-primary);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; text-decoration: none;
+        flex-shrink: 0; transition: background 0.2s;
+    }
+    .back-btn:hover { background: var(--bg-tertiary); }
+    .sec-header h1 { font-size: 19px; font-weight: 700; color: var(--text-primary); margin: 0; }
+
+    /* ── Секции ── */
+    .section {
+        padding: 24px 16px 0;
+    }
+
+    .section-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+        margin-bottom: 10px;
+        padding: 0 4px;
+    }
+
+    .box {
+        background: var(--bg-tertiary);
+        border-radius: 16px;
+        padding: 20px;
+    }
+
+    /* ── Описание ── */
+    .desc {
+        font-size: 14px;
+        color: var(--text-secondary);
+        line-height: 1.65;
+        margin-bottom: 18px;
+    }
+
+    .desc a { color: var(--accent); word-break: break-all; }
+
+    .steps {
+        margin: 10px 0 18px;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .steps li {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-size: 14px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+
+    .step-num {
+        background: var(--accent);
+        color: #fff;
+        border-radius: 50%;
+        width: 22px; height: 22px;
+        font-size: 12px; font-weight: 700;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+
+    /* ── Форма ── */
+    .field-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+        display: block;
+    }
+
+    .input-row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+    }
+
+    .n-input {
+        flex: 1;
+        background: var(--bg-primary);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 11px 14px;
+        font-size: 14px;
+        color: var(--text-primary);
+        outline: none;
+        transition: border-color 0.2s;
+        min-width: 0;
+    }
+    .n-input:focus { border-color: var(--accent); }
+    .n-input::placeholder { color: var(--text-muted); }
+
+    .save-btn {
+        padding: 11px 20px;
+        background: var(--accent);
+        color: #fff; border: none; border-radius: 10px;
+        font-size: 14px; font-weight: 600;
+        cursor: pointer; transition: opacity 0.2s;
+        white-space: nowrap; flex-shrink: 0;
+    }
+    .save-btn:hover { opacity: 0.85; }
+    .save-btn:disabled { opacity: 0.5; cursor: default; }
+
+    .field-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 6px;
+        line-height: 1.4;
+    }
+
+    /* ── Разделитель внутри box ── */
+    .divider {
+        height: 1px;
+        background: var(--border);
+        margin: 18px 0;
+    }
+
+    /* ── Сервер ── */
+    .server-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 18px;
+    }
+
+    /* ── Статус ── */
+    .status-row {
+        margin-top: 12px;
+        min-height: 18px;
+        font-size: 13px;
+    }
+    .status-row.ok  { color: #4ade80; }
+    .status-row.err { color: #f87171; }
+
+    /* ── Тест-кнопка ── */
+    .test-btn {
+        padding: 10px 18px;
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--text-primary);
+        font-size: 14px; font-weight: 600;
+        cursor: pointer; transition: background 0.15s;
+    }
+    .test-btn:hover { background: var(--bg-hover, rgba(255,255,255,0.05)); }
+
+    /* ── Удалить ── */
+    .remove-btn {
+        padding: 10px 18px;
+        background: rgba(239,68,68,0.12);
+        border: 1px solid rgba(239,68,68,0.25);
+        border-radius: 10px;
+        color: #f87171;
+        font-size: 14px; font-weight: 600;
+        cursor: pointer; transition: background 0.15s;
+    }
+    .remove-btn:hover { background: rgba(239,68,68,0.2); }
+
+    .btn-row {
+        display: flex; gap: 8px; flex-wrap: wrap;
+        margin-top: 12px;
+    }
+
+    /* ── Текущий топик ── */
+    .current-topic {
+        background: var(--bg-primary);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 12px;
+        word-break: break-all;
+    }
+    .current-topic span { color: var(--accent); font-weight: 600; }
+
+    @media (max-width: 560px) { .sec-card { max-width: 100%; } }
+</style>
+
+<div class="sec-page">
+<div class="sec-card">
+
+    <div class="sec-header">
+        <a href="{{ url_for('security') }}" class="back-btn" title="Назад">
+            <svg width="22" height="22" viewBox="0 0 1024 1024"><use xlink:href="#icon-back"></use></svg>
+        </a>
+        <h1>Уведомления</h1>
+    </div>
+
+    <!-- Описание -->
+    <div class="section">
+        <div class="section-title">Как это работает</div>
+        <div class="box">
+            <p class="desc">
+                Мессенджер отправляет push-уведомления через <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> —
+                открытый сервис без аккаунта. Вы получите уведомления о новых сообщениях и входах в аккаунт
+                прямо на телефон или компьютер.
+            </p>
+            <ol class="steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>Установите приложение <strong>ntfy</strong>: <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> → Apps</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>Придумайте уникальный секретный топик — любой набор букв и цифр, например <code>myapp_k7r9xz</code></span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>Подпишитесь на этот топик в приложении ntfy</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>Введите топик ниже и сохраните. Уведомления начнут приходить сразу</span>
+                </li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- Настройка -->
+    <div class="section" style="padding-top: 20px;">
+        <div class="section-title">Настройка ntfy</div>
+        <div class="box">
+
+            <!-- Текущий топик -->
+            {% if current_user.push_token %}
+            <div class="current-topic">
+                Текущий топик: <span>{{ current_user.push_token }}</span>
+            </div>
+            {% endif %}
+
+            <!-- Поле сервера -->
+            <div class="server-row">
+                <label class="field-label" for="ntfy-server">ntfy-сервер (необязательно)</label>
+                <input
+                    class="n-input"
+                    id="ntfy-server"
+                    type="url"
+                    placeholder="https://ntfy.sh"
+                    value="{{ ntfy_server or '' }}"
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+                <p class="field-hint">Оставьте пустым для ntfy.sh. Укажите URL своего сервера если используете самохостинг.</p>
+            </div>
+
+            <!-- Топик -->
+            <label class="field-label" for="ntfy-topic">Топик</label>
+            <div class="input-row">
+                <input
+                    class="n-input"
+                    id="ntfy-topic"
+                    type="text"
+                    placeholder="my_secret_topic_abc123"
+                    value="{{ current_user.push_token or '' }}"
+                    autocomplete="off"
+                    spellcheck="false"
+                    maxlength="200"
+                >
+                <button class="save-btn" id="save-btn" onclick="saveTopic()">Сохранить</button>
+            </div>
+            <p class="field-hint">Используйте уникальный трудноугадываемый топик — это ваш «пароль» от уведомлений.</p>
+
+            <div class="status-row" id="status"></div>
+
+            <div class="divider"></div>
+
+            <div class="btn-row">
+                <button class="test-btn" onclick="sendTest()">[&] Тест</button>
+                {% if current_user.push_token %}
+                <button class="remove-btn" onclick="removeTopic()">Отключить уведомления</button>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- О типах уведомлений -->
+    <div class="section" style="padding-top: 20px; padding-bottom: 32px;">
+        <div class="section-title">Что приходит</div>
+        <div class="box" style="padding: 0; overflow: hidden;">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 16px; border-bottom: 1px solid var(--border);">
+                <span style="font-size: 22px;">[M]</span>
+                <div>
+                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Личные сообщения</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">Уведомление с именем отправителя и превью текста</div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 14px; padding: 16px; border-bottom: 1px solid var(--border);">
+                <span style="font-size: 22px;">[||]</span>
+                <div>
+                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Сообщения в группах</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">Название группы, автор и превью сообщения</div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 14px; padding: 16px;">
+                <span style="font-size: 22px;">[|]</span>
+                <div>
+                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Новый вход в аккаунт</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">IP-адрес и устройство, с которого выполнен вход</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+</div>
+
+<script>
+async function saveTopic() {
+    const topic  = document.getElementById('ntfy-topic').value.trim();
+    const server = document.getElementById('ntfy-server').value.trim();
+    const btn    = document.getElementById('save-btn');
+    const status = document.getElementById('status');
+
+    if (!topic) {
+        setStatus('Введите топик', 'err');
+        return;
+    }
+
+    btn.disabled = true;
+    setStatus('Сохранение…', '');
+
+    try {
+        const fd = new FormData();
+        fd.append('topic', topic);
+        if (server) fd.append('server', server);
+
+        const r = await fetch('{{ url_for("save_ntfy_settings") }}', { method: 'POST', body: fd });
+        const d = await r.json();
+
+        if (d.success) {
+            setStatus('✓ Сохранено', 'ok');
+            setTimeout(() => location.reload(), 800);
+        } else {
+            setStatus(d.error || 'Ошибка', 'err');
+        }
+    } catch {
+        setStatus('Ошибка сети', 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function sendTest() {
+    const topic  = document.getElementById('ntfy-topic').value.trim();
+    const server = document.getElementById('ntfy-server').value.trim();
+    const status = document.getElementById('status');
+
+    if (!topic) {
+        setStatus('Сначала укажите топик', 'err');
+        return;
+    }
+
+    setStatus('Отправляем тестовое уведомление…', '');
+
+    try {
+        const fd = new FormData();
+        fd.append('topic', topic);
+        if (server) fd.append('server', server);
+
+        const r = await fetch('{{ url_for("test_ntfy_notification") }}', { method: 'POST', body: fd });
+        const d = await r.json();
+
+        if (d.success) {
+            setStatus('✓ Уведомление отправлено — проверьте ntfy', 'ok');
+        } else {
+            setStatus(d.error || 'Ошибка', 'err');
+        }
+    } catch {
+        setStatus('Ошибка сети', 'err');
+    }
+}
+
+async function removeTopic() {
+    if (!confirm('Отключить push-уведомления?')) return;
+    const status = document.getElementById('status');
+    setStatus('Отключение…', '');
+
+    try {
+        const r = await fetch('{{ url_for("remove_ntfy_settings") }}', { method: 'POST' });
+        const d = await r.json();
+        if (d.success) {
+            setStatus('Уведомления отключены', 'ok');
+            setTimeout(() => location.reload(), 800);
+        } else {
+            setStatus(d.error || 'Ошибка', 'err');
+        }
+    } catch {
+        setStatus('Ошибка сети', 'err');
+    }
+}
+
+function setStatus(msg, cls) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className   = 'status-row' + (cls ? ' ' + cls : '');
+}
+</script>
+{% endblock %}

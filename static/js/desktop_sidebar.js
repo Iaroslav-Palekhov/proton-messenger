@@ -7,12 +7,10 @@
 // Called on DOMContentLoaded from each page
 function dsStartLiveChats() {
     if (typeof io !== 'undefined') {
-        const socket = io({ transports: ['websocket', 'polling'], reconnectionDelay: 1000 });
+        const socket = io({ transports: ['websocket'], reconnectionDelay: 1000 });
         socket.on('connect', () => { socket.emit('heartbeat'); dsFetchAndRender(); });
         socket.on('chat_updated', () => dsFetchAndRender());
-        socket.on('disconnect', () => setTimeout(() => setInterval(dsFetchAndRender, 5000), 2000));
-    } else {
-        setInterval(dsFetchAndRender, 5000);
+        socket.on('reconnect', () => dsFetchAndRender());
     }
     dsFetchAndRender();
 }
@@ -123,10 +121,57 @@ function dsDeleteChat(chatId, chatName) {
     });
 }
 
+let _dsSearchTimeout = null;
+
 function dsFilterChats(q) {
-    const query = q.toLowerCase();
+    const query = q.toLowerCase().trim();
+
+    // Фильтруем существующие чаты
     document.querySelectorAll('.ds-chat-item').forEach(item => {
         const name = (item.dataset.name || '').toLowerCase();
         item.style.display = name.includes(query) ? '' : 'none';
     });
+
+    // Удаляем старую секцию поиска
+    const old = document.getElementById('dsUserSearchSection');
+    if (old) old.remove();
+
+    if (!query) return;
+
+    clearTimeout(_dsSearchTimeout);
+    _dsSearchTimeout = setTimeout(() => {
+        fetch(`/api/search_users?q=${encodeURIComponent(q)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.users || data.users.length === 0) return;
+                const section = document.createElement('div');
+                section.id = 'dsUserSearchSection';
+                section.innerHTML = `
+                    <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:12px 14px 6px;">Пользователи</div>
+                    ${data.users.map(u => `
+                        <div class="ds-chat-item" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .15s;border-radius:10px;text-decoration:none;"
+                             onmouseenter="this.style.background='var(--bg-hover)'"
+                             onmouseleave="this.style.background=''">
+                            <img src="${u.avatar}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;"
+                                 onerror="this.src='/static/uploads/avatars/default.png'">
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${u.username}</div>
+                                <div style="font-size:12px;color:var(--text-muted);">${u.status === 'online' ? 'Онлайн' : 'Не в сети'}</div>
+                            </div>
+                            <button onclick="dsChatFromSearch('${u.username}')" title="Написать"
+                                    style="background:rgba(0,168,132,.12);color:var(--accent);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">
+                                Написать
+                            </button>
+                        </div>
+                    `).join('')}
+                `;
+                const chatsList = document.getElementById('dsChatsList');
+                if (chatsList) chatsList.prepend(section);
+            })
+            .catch(() => {});
+    }, 250);
+}
+
+function dsChatFromSearch(username) {
+    window.location.href = `/start_chat?username=${encodeURIComponent(username)}`;
 }

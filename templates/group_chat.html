@@ -13,9 +13,21 @@
         display: flex;
         flex-direction: column;
         height: 100%;
+        height: 100dvh;
         width: 100%;
         background: var(--bg-primary);
         overflow: hidden;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+    }
+
+    /* На десктопе chat-container внутри .ds-chat-panel — не нужен fixed */
+    @media (min-width: 901px) {
+        .chat-container {
+            position: relative;
+            height: 100%;
+            top: auto; left: auto; right: auto; bottom: auto;
+        }
     }
 
     /* Шапка чата */
@@ -114,15 +126,18 @@
 
     /* Контейнер сообщений */
     .messages-container {
-        flex: 1;
+        flex: 1 1 0;
+        min-height: 0;
         padding: 20px;
         overflow-y: auto;
+        overflow-x: hidden;
         background: #0e1c26;
         background-image: radial-gradient(circle at 10% 20%, rgba(0, 168, 132, 0.03) 0%, transparent 20%);
         display: flex;
         flex-direction: column;
         gap: 8px;
-        min-height: 0;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
     }
 
     .message {
@@ -272,10 +287,12 @@
     }
 
     .message-input {
-        padding: 20px;
+        flex-shrink: 0;
+        padding: 12px 20px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
         background: var(--bg-secondary);
         border-top: 1px solid var(--border);
-        flex-shrink: 0;
+        z-index: 10;
     }
 
     .input-group {
@@ -338,6 +355,30 @@
         cursor: not-allowed;
         pointer-events: none;
     }
+
+    .audio-player {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 12px; background: var(--bg-hover);
+        border-radius: 20px; min-width: 220px; max-width: 320px;
+    }
+    .audio-play-btn {
+        width: 36px; height: 36px; border-radius: 50%;
+        background: var(--accent); border: none; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; color: white; transition: transform .15s, opacity .15s;
+    }
+    .audio-play-btn:hover { opacity:.85; transform:scale(1.05); }
+    .audio-progress-wrap { flex:1; display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .audio-progress {
+        -webkit-appearance:none; appearance:none;
+        width:100%; height:4px; border-radius:2px;
+        background:var(--border); outline:none; cursor:pointer;
+    }
+    .audio-progress::-webkit-slider-thumb {
+        -webkit-appearance:none; width:12px; height:12px;
+        border-radius:50%; background:var(--accent); cursor:pointer;
+    }
+    .audio-time { font-size:11px; color:var(--text-muted); }
 
     .file-preview {
         margin-top: 10px;
@@ -627,22 +668,39 @@
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
 
-    .message-actions {
-        position: absolute;
-        top: -20px;
-        right: 10px;
+    /* Context menu */
+    .message-context-menu {
+        position: fixed;
         background: var(--bg-secondary);
-        border-radius: 20px;
-        padding: 5px;
+        border-radius: 12px;
+        padding: 6px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        z-index: 1000;
         display: none;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-        z-index: 10;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 180px;
+        border: 1px solid var(--border);
     }
-
-    .message-bubble:hover .message-actions {
+    .message-context-menu.visible { display: flex; }
+    .ctx-menu-btn {
+        background: transparent;
+        border: none;
+        color: var(--text-primary);
+        font-size: 14px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.15s;
         display: flex;
-        gap: 5px;
+        align-items: center;
+        gap: 10px;
+        text-align: left;
+        width: 100%;
     }
+    .ctx-menu-btn:hover { background: var(--bg-hover); }
+    .ctx-menu-btn.danger { color: var(--danger); }
+    .message-actions { display: none !important; }
 
     .message-action-btn {
         background: transparent;
@@ -767,16 +825,6 @@
         .modal-content {
             width: 95%;
             padding: 20px;
-        }
-
-        .message-actions {
-            position: static;
-            margin-top: 10px;
-            justify-content: flex-end;
-        }
-
-        .message-bubble:hover .message-actions {
-            display: flex;
         }
 
         .chat-actions {
@@ -1016,7 +1064,7 @@
         });
     }
 
-    // Fallback polling (используется только без WS)
+    // Загрузка пропущенных сообщений при переподключении WS
     function updateMessages() {
         fetch(`/get_messages/${currentGroupId}?last_id=${lastMessageId}&is_group=true`)
             .then(response => response.json())
@@ -1024,26 +1072,15 @@
                 if (messages.length > 0) {
                     const container = document.getElementById('messagesContainer');
                     const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-
                     messages.forEach(message => {
                         addMessageToChat(message);
-                        if (message.id > lastMessageId) {
-                            lastMessageId = message.id;
-                        }
+                        if (message.id > lastMessageId) lastMessageId = message.id;
                     });
-
-                    if (!isScrolledUp || wasAtBottom) {
-                        container.scrollTop = container.scrollHeight;
-                    } else {
-                        container.scrollTop = container.scrollHeight - scrollPosition;
-                    }
+                    if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
+                    else container.scrollTop = container.scrollHeight - scrollPosition;
                 }
-                if (!window._wsGroupConnected) setTimeout(updateMessages, 3000);
             })
-            .catch(error => {
-                console.error('Ошибка обновления:', error);
-                if (!window._wsGroupConnected) setTimeout(updateMessages, 5000);
-            });
+            .catch(err => console.error('[Group] Ошибка загрузки пропущенных:', err));
     }
 
     // ====== WebSocket для группового чата ======
@@ -1052,7 +1089,7 @@
 
     function initGroupWebSocket() {
         const socket = io({
-            transports: ['websocket', 'polling'],
+            transports: ['websocket'],
             reconnectionDelay: 1000,
             reconnectionAttempts: 10,
         });
@@ -1067,12 +1104,13 @@
 
         socket.on('disconnect', () => {
             window._wsGroupConnected = false;
-            setTimeout(updateMessages, 2000);
+            console.log('[WS group] disconnected — ожидаем переподключение');
         });
 
         socket.on('reconnect', () => {
             window._wsGroupConnected = true;
             socket.emit('join_group', { group_id: currentGroupId });
+            updateMessages(); // загружаем пропущенные
         });
 
         // Новое сообщение
@@ -1248,19 +1286,36 @@
                 fileIcon = '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-file"></use></svg>';
             }
             const fileUrl = resolveDownloadUrl(message.file_path);
-            contentHtml = `
-                <div class="file-message" onclick="downloadFile('${fileUrl}', '${escapeHtml(message.file_name)}')">
-                    <span class="file-icon">${fileIcon}</span>
-                    <div class="file-info">
-                        <div class="file-name">${escapeHtml(message.file_name)}</div>
-                        <div class="file-size">${message.file_size || '0 KB'}</div>
+            const fn = message.file_name || 'Файл';
+            const fext = fn.split('.').pop().toLowerCase();
+
+            // Аудиофайлы — встроенный плеер
+            if (['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'webm'].includes(fext)) {
+                contentHtml = `<div class="audio-player" data-src="${fileUrl}">
+                    <button class="audio-play-btn" onclick="toggleAudio(this)" title="Воспроизвести">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                    </button>
+                    <div class="audio-progress-wrap">
+                        <input type="range" class="audio-progress" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this)">
+                        <span class="audio-time">0:00</span>
                     </div>
-                    <span style="font-size: 20px;">
-                        <svg width="20" height="20" viewBox="0 0 1024 1024">
-                            <use xlink:href="#icon-attach"></use>
-                        </svg>
-                    </span>
+                    <audio src="${fileUrl}" preload="none" style="display:none;"></audio>
                 </div>`;
+            } else {
+                contentHtml = `
+                    <div class="file-message" onclick="downloadFile('${fileUrl}', '${escapeHtml(fn)}')">
+                        <span class="file-icon">${fileIcon}</span>
+                        <div class="file-info">
+                            <div class="file-name">${escapeHtml(fn)}</div>
+                            <div class="file-size">${message.file_size || '0 KB'}</div>
+                        </div>
+                        <span style="font-size: 20px;">
+                            <svg width="20" height="20" viewBox="0 0 1024 1024">
+                                <use xlink:href="#icon-attach"></use>
+                            </svg>
+                        </span>
+                    </div>`;
+            }
         }
         else if (message.content) {
             const escapedText = escapeHtml(message.content);
@@ -1366,7 +1421,9 @@
             const fileText = input.value;
             isSending = true;
             sendButton.disabled = true;
-            sendButton.innerHTML = `<svg width="24" height="24" viewBox="0 0 1024 1024" class="spinning"><use xlink:href="#icon-loading"></use></svg>`;
+            
+            
+            
             input.value = '';
             const tempId = 'temp_' + Date.now();
             const senderName = '{{ current_user.username }}';
@@ -1432,7 +1489,7 @@
                     } else { restoreFailedMessage(tempId, fileText, data.error||'Ошибка отправки'); }
                 })
                 .catch(e => { console.error(e); restoreFailedMessage(tempId, fileText, 'Ошибка соединения'); })
-                .finally(() => { isSending=false; sendButton.disabled=false; sendButton.innerHTML=`<svg width="24" height="24" viewBox="0 0 1024 1024"><use xlink:href="#icon-send"></use></svg>`; });
+                .finally(() => { isSending=false; sendButton.disabled=false;   });
             cancelReply();
             return;
         }
@@ -1440,7 +1497,9 @@
         // Текст — только WebSocket
         isSending = true;
         sendButton.disabled = true;
-        sendButton.innerHTML = `<svg width="24" height="24" viewBox="0 0 1024 1024" class="spinning"><use xlink:href="#icon-loading"></use></svg>`;
+        
+        
+        
         input.value = '';
 
         const tempId = 'temp_' + Date.now();
@@ -1468,7 +1527,8 @@
         cancelReply();
         isSending = false;
         sendButton.disabled = false;
-        sendButton.innerHTML = `<svg width="24" height="24" viewBox="0 0 1024 1024"><use xlink:href="#icon-send"></use></svg>`;
+        
+        
         input.focus();
     }
 
@@ -1600,7 +1660,190 @@
     function clearFile() {
         document.getElementById('fileInput').value = '';
         document.getElementById('filePreview').style.display = 'none';
+        
     }
+
+    /* =====================================================
+       АУДИОПЛЕЕР
+    ===================================================== */
+    function toggleAudio(btn) {
+        const player = btn.closest('.audio-player');
+        const audio  = player.querySelector('audio');
+        const prog   = player.querySelector('.audio-progress');
+        const timeEl = player.querySelector('.audio-time');
+        const playIcon  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>`;
+        const pauseIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
+
+        document.querySelectorAll('.audio-player audio').forEach(a => {
+            if (a !== audio && !a.paused) {
+                a.pause();
+                const otherBtn = a.closest('.audio-player').querySelector('.audio-play-btn');
+                if (otherBtn) otherBtn.innerHTML = playIcon;
+            }
+        });
+
+        if (audio.paused) {
+            audio.play();
+            btn.innerHTML = pauseIcon;
+            audio.ontimeupdate = () => {
+                if (audio.duration) {
+                    prog.value = (audio.currentTime / audio.duration) * 100;
+                    timeEl.textContent = _fmtTime(audio.currentTime) + ' / ' + _fmtTime(audio.duration);
+                }
+            };
+            audio.onended = () => {
+                btn.innerHTML = playIcon;
+                prog.value = 0;
+                timeEl.textContent = '0:00';
+            };
+        } else {
+            audio.pause();
+            btn.innerHTML = playIcon;
+        }
+    }
+
+    function seekAudio(input) {
+        const audio = input.closest('.audio-player').querySelector('audio');
+        if (audio.duration) audio.currentTime = (input.value / 100) * audio.duration;
+    }
+
+    function _fmtTime(s) {
+        const m = Math.floor(s / 60);
+        return m + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+    }
+
+    function seekAudio(input) {
+        const audio = input.closest('.audio-player').querySelector('audio');
+        if (audio.duration) audio.currentTime = (input.value / 100) * audio.duration;
+    }
+
+    function _fmtTime(s) {
+        const m = Math.floor(s / 60);
+        return m + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+    }
+
+    /* =====================================================
+       КОНТЕКСТНОЕ МЕНЮ СООБЩЕНИЙ (ПКМ / долгое удержание)
+    ===================================================== */
+    let _ctxMenu = null;
+    let _longPressTimer = null;
+    let _longPressTarget = null;
+
+    function createContextMenu() {
+        if (_ctxMenu) return _ctxMenu;
+        const el = document.createElement('div');
+        el.className = 'message-context-menu';
+        el.id = 'msgContextMenu';
+        document.body.appendChild(el);
+        _ctxMenu = el;
+        return el;
+    }
+
+    function showContextMenu(e, messageEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        const msgId = parseInt(messageEl.dataset.messageId);
+        if (!msgId || isNaN(msgId)) return;
+
+        const isSent = messageEl.classList.contains('sent');
+        const hasText = !!messageEl.querySelector('.message-content p');
+
+        const menu = createContextMenu();
+        menu.innerHTML = '';
+
+        const addBtn = (icon, label, fn, danger) => {
+            const btn = document.createElement('button');
+            btn.className = 'ctx-menu-btn' + (danger ? ' danger' : '');
+            btn.innerHTML = `${icon}<span>${label}</span>`;
+            btn.addEventListener('click', () => { hideContextMenu(); fn(); });
+            menu.appendChild(btn);
+        };
+
+        addBtn(`<svg width="18" height="18" viewBox="0 0 1024 1024"><use xlink:href="#icon-back"></use></svg>`, 'Ответить', () => replyToMessage(msgId));
+        addBtn(`<svg width="18" height="18" viewBox="0 0 24 24"><use xlink:href="#icon-group"></use></svg>`, 'Переслать', () => forwardMessage(msgId));
+
+        if (isSent && hasText) {
+            addBtn(`<svg width="18" height="18" viewBox="0 0 24 24"><use xlink:href="#icon-edit"></use></svg>`, 'Редактировать', () => {
+                const bubble = messageEl.querySelector('.message-bubble');
+                editMessageById(msgId, bubble);
+            });
+        }
+
+        if (isSent) {
+            addBtn(`<svg width="18" height="18" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg>`, 'Удалить', () => deleteMessage(msgId), true);
+        }
+
+        menu.classList.add('visible');
+        const menuW = 200, menuH = menu.offsetHeight || 200;
+        let x = e.clientX, y = e.clientY;
+        if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8;
+        if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 8;
+        menu.style.left = x + 'px';
+        menu.style.top  = y + 'px';
+    }
+
+    function hideContextMenu() {
+        if (_ctxMenu) _ctxMenu.classList.remove('visible');
+    }
+
+    function editMessageById(messageId, bubble) {
+        const contentDiv = bubble ? bubble.querySelector('.message-content p') : null;
+        if (!contentDiv) return;
+        const currentText = contentDiv.textContent;
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2><svg width="22" height="22" viewBox="0 0 24 24" style="margin-right:10px;"><use xlink:href="#icon-edit"></use></svg>Редактировать</h2>
+                    <span class="close-modal" onclick="this.closest('.modal').remove()">&times;</span>
+                </div>
+                <textarea id="editMessageText" style="width:100%; min-height:100px; padding:12px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:12px; color:var(--text-primary); font-size:15px; resize:vertical;">${escapeHtml(currentText)}</textarea>
+                <div style="display:flex; gap:10px; margin-top:15px;">
+                    <button class="btn btn-secondary" style="flex:1;" onclick="this.closest('.modal').remove()">Отмена</button>
+                    <button class="btn" style="flex:1;" onclick="submitEdit(${messageId}, this)">Сохранить</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#editMessageText').focus();
+        modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+
+        container.addEventListener('contextmenu', e => {
+            const bubble = e.target.closest('.message-bubble');
+            if (!bubble) return;
+            const msgEl = bubble.closest('.message');
+            if (!msgEl) return;
+            showContextMenu(e, msgEl);
+        });
+
+        container.addEventListener('touchstart', e => {
+            const bubble = e.target.closest('.message-bubble');
+            if (!bubble) return;
+            const msgEl = bubble.closest('.message');
+            if (!msgEl) return;
+            _longPressTarget = { msgEl, touch: e.touches[0] };
+            _longPressTimer = setTimeout(() => {
+                if (_longPressTarget) {
+                    const fakeE = { preventDefault: ()=>{}, stopPropagation: ()=>{}, clientX: _longPressTarget.touch.clientX, clientY: _longPressTarget.touch.clientY };
+                    showContextMenu(fakeE, _longPressTarget.msgEl);
+                    _longPressTarget = null;
+                }
+            }, 500);
+        }, { passive: true });
+
+        container.addEventListener('touchend', () => { clearTimeout(_longPressTimer); _longPressTarget = null; });
+        container.addEventListener('touchmove', () => { clearTimeout(_longPressTimer); _longPressTarget = null; });
+
+        document.addEventListener('click', e => {
+            if (_ctxMenu && !_ctxMenu.contains(e.target)) hideContextMenu();
+        });
+        document.addEventListener('scroll', hideContextMenu, true);
+    });
 
     // Скачивание файла
     function downloadFile(filePath, fileName) {
@@ -2484,6 +2727,11 @@
                     <use xlink:href="#icon-image"></use>
                 </svg>
             </button>
+            <button class="btn-icon desktop-only-btn" onclick="window.location.href='{{ url_for('export_chat', context_id=group.id, is_group=1) }}'" title="Экспорт истории чата" style="display:none;">
+                <svg width="24" height="24" viewBox="0 0 24 24">
+                    <use xlink:href="#icon-download"></use>
+                </svg>
+            </button>
             {% if pinned_messages %}
             <button class="btn-icon" onclick="showPinnedMessages()" title="Закреплённые" style="position:relative;">
                 <svg width="24" height="24" viewBox="0 0 1024 1024">
@@ -2621,25 +2869,29 @@
                                  class="message-image"
                                  onclick="openImageModal(this.src)">
                             {% elif message.file_path %}
+                            {% set ext = message.file_name.split('.')[-1].lower() if message.file_name else '' %}
+                            {% if ext in ['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'webm'] %}
+                            <div class="audio-player">
+                                <button class="audio-play-btn" onclick="toggleAudio(this)" title="Воспроизвести">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                                </button>
+                                <div class="audio-progress-wrap">
+                                    <input type="range" class="audio-progress" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this)">
+                                    <span class="audio-time">0:00</span>
+                                </div>
+                                <audio src="{{ url_for('download_file', filepath=message.file_path) }}" preload="none" style="display:none;"></audio>
+                            </div>
+                            {% else %}
                             <div class="file-message" onclick="downloadFile('{{ url_for('download_file', filepath=message.file_path) }}', '{{ message.file_name }}')">
                                 <span class="file-icon">
-                                    {% set ext = message.file_name.split('.')[-1].lower() if message.file_name else '' %}
                                     {% if ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] %}
-                                        <svg width="32" height="32" viewBox="0 0 1024 1024">
-                                            <use xlink:href="#icon-image"></use>
-                                        </svg>
+                                        <svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-image"></use></svg>
                                     {% elif ext == 'pdf' %}
-                                        <svg width="32" height="32" viewBox="0 0 1024 1024">
-                                            <use xlink:href="#icon-pdf"></use>
-                                        </svg>
+                                        <svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-pdf"></use></svg>
                                     {% elif ext in ['zip', 'rar', '7z', 'tar', 'gz'] %}
-                                        <svg width="32" height="32" viewBox="0 0 1024 1024">
-                                            <use xlink:href="#icon-zip"></use>
-                                        </svg>
+                                        <svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-zip"></use></svg>
                                     {% else %}
-                                        <svg width="32" height="32" viewBox="0 0 1024 1024">
-                                            <use xlink:href="#icon-file"></use>
-                                        </svg>
+                                        <svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-file"></use></svg>
                                     {% endif %}
                                 </span>
                                 <div class="file-info">
@@ -2647,11 +2899,10 @@
                                     <div class="file-size">{{ (message.file_size / 1024)|round(1) if message.file_size else 0 }} KB</div>
                                 </div>
                                 <span style="font-size: 20px;">
-                                    <svg width="20" height="20" viewBox="0 0 1024 1024">
-                                        <use xlink:href="#icon-attach"></use>
-                                    </svg>
+                                    <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg>
                                 </span>
                             </div>
+                            {% endif %}
                             {% elif message.content %}
                                 <p style="white-space: pre-wrap; word-break: break-word; margin: 0;">{{ message.content }}</p>
                             {% endif %}
@@ -2765,7 +3016,7 @@
                        autocomplete="off"
                        onkeypress="if(event.keyCode === 13 && !event.shiftKey) {event.preventDefault(); sendMessage();}">
 
-                <button type="button" class="send-btn" onclick="sendMessage()" title="Отправить">
+                <button type="button" class="send-btn" id="sendBtn" onclick="sendMessage()" title="Отправить">
                     <svg width="24" height="24" viewBox="0 0 1024 1024">
                         <use xlink:href="#icon-send"></use>
                     </svg>
@@ -3053,6 +3304,12 @@ function submitEdit(messageId, btn) {
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     dsStartLiveChats();
+    // Показываем кнопку экспорта только на десктопе (ширина > 768px)
+    if (window.innerWidth > 768) {
+        document.querySelectorAll('.desktop-only-btn').forEach(function(btn) {
+            btn.style.display = '';
+        });
+    }
 });
 </script>
 

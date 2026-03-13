@@ -93,7 +93,7 @@ def _serialize_message(msg: Message, current_user_id: int, app) -> dict:
         "file_type": msg.file_type,
         "file_size": format_file_size(msg.file_size) if msg.file_size else None,
         "file_category": msg.file_category or (get_file_category(msg.file_name) if msg.file_name else None),
-        "file_icon": get_file_icon(msg.file_name) if msg.file_name else "📎",
+        "file_icon": get_file_icon(msg.file_name) if msg.file_name else "[file]",
         "timestamp": msg.timestamp.strftime("%H:%M"),
         "is_read": msg.is_read,
         "is_edited": msg.is_edited,
@@ -288,7 +288,7 @@ def _emit_chat_update(chat_id: int, msg: Message, receiver_id: int):
     """Отправляет обновление списка чатов получателю."""
     from flask import url_for
     sender = msg.sender
-    preview = msg.content[:30] if msg.content else ("📷 Фото" if msg.image_path else "📎 Файл")
+    preview = msg.content[:30] if msg.content else ("[Фото]" if msg.image_path else "[Файл]")
     payload = {
         "chat_id": chat_id,
         "type": "private",
@@ -300,11 +300,23 @@ def _emit_chat_update(chat_id: int, msg: Message, receiver_id: int):
     # Себе тоже (чтобы список чатов обновился на другой вкладке)
     socketio.emit("chat_updated", payload, to=f"user_{msg.sender_id}")
 
+    # ── ntfy push-уведомление получателю ──
+    try:
+        from ntfy_notifications import notify_new_message
+        recipient = User.query.get(receiver_id)
+        if recipient and recipient.push_token:
+            from flask import current_app
+            ntfy_server = recipient.ntfy_server or current_app.config.get('NTFY_SERVER', 'https://ntfy.sh')
+            sender_name = sender.username if sender else 'Кто-то'
+            notify_new_message(recipient, sender_name, preview, server=ntfy_server)
+    except Exception:
+        pass
+
 
 def _emit_group_update(group_id: int, msg: Message):
     """Отправляет обновление группового чата всем участникам."""
     members = GroupMember.query.filter_by(group_id=group_id).all()
-    preview = msg.content[:30] if msg.content else ("📷 Фото" if msg.image_path else "📎 Файл")
+    preview = msg.content[:30] if msg.content else ("[Фото]" if msg.image_path else "[Файл]")
     payload = {
         "group_id": group_id,
         "type": "group",
@@ -315,6 +327,23 @@ def _emit_group_update(group_id: int, msg: Message):
     }
     for m in members:
         socketio.emit("chat_updated", payload, to=f"user_{m.user_id}")
+
+    # ── ntfy push-уведомления участникам (кроме отправителя) ──
+    try:
+        from ntfy_notifications import notify_group_message
+        from flask import current_app
+        group = Group.query.get(group_id)
+        sender_name = msg.sender.username if msg.sender else 'Кто-то'
+        group_name  = group.name if group else 'Группа'
+        for m in members:
+            if m.user_id == msg.sender_id:
+                continue
+            member_user = User.query.get(m.user_id)
+            if member_user and member_user.push_token:
+                ntfy_server = member_user.ntfy_server or current_app.config.get('NTFY_SERVER', 'https://ntfy.sh')
+                notify_group_message(member_user, sender_name, group_name, preview, server=ntfy_server)
+    except Exception:
+        pass
 
 
 def _schedule_link_preview(msg_id: int, content: str, chat_id, group_id, app):

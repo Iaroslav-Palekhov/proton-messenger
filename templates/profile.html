@@ -154,6 +154,32 @@
             Написать сообщение
         </a>
 
+        <!-- Кнопка добавить / убрать из контактов -->
+        {% if is_contact %}
+        <button class="btn-block-user btn-do-unblock" id="contactBtn"
+                onclick="toggleContact({{ profile_user.id }}, true)"
+                style="background: rgba(0,168,132,0.1); color: var(--accent); border-color: rgba(0,168,132,0.3);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <line x1="23" y1="11" x2="17" y2="11"/>
+            </svg>
+            В контактах
+        </button>
+        {% else %}
+        <button class="btn-block-user btn-do-block" id="contactBtn"
+                onclick="toggleContact({{ profile_user.id }}, false)"
+                style="background: rgba(0,168,132,0.08); color: var(--accent); border-color: rgba(0,168,132,0.25);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <line x1="19" y1="8" x2="19" y2="14"/>
+                <line x1="22" y1="11" x2="16" y2="11"/>
+            </svg>
+            Добавить в контакты
+        </button>
+        {% endif %}
+
         <!-- Кнопка блокировки / разблокировки -->
         {% if is_blocked %}
         <button class="btn-block-user btn-do-unblock" id="blockBtn"
@@ -230,6 +256,50 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function toggleContact(userId, inContacts) {
+    const btn = document.getElementById('contactBtn');
+    btn.disabled = true;
+    const url = inContacts ? `/contacts/remove/${userId}` : `/contacts/add/${userId}`;
+    fetch(url, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                if (inContacts) {
+                    btn.style.background = 'rgba(0,168,132,0.08)';
+                    btn.style.color = 'var(--accent)';
+                    btn.style.borderColor = 'rgba(0,168,132,0.25)';
+                    btn.innerHTML = `
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <line x1="19" y1="8" x2="19" y2="14"/>
+                            <line x1="22" y1="11" x2="16" y2="11"/>
+                        </svg>
+                        Добавить в контакты`;
+                    btn.setAttribute('onclick', `toggleContact(${userId}, false)`);
+                    showToast('Удалено из контактов');
+                } else {
+                    btn.style.background = 'rgba(0,168,132,0.1)';
+                    btn.style.color = 'var(--accent)';
+                    btn.style.borderColor = 'rgba(0,168,132,0.3)';
+                    btn.innerHTML = `
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <line x1="23" y1="11" x2="17" y2="11"/>
+                        </svg>
+                        В контактах`;
+                    btn.setAttribute('onclick', `toggleContact(${userId}, true)`);
+                    showToast('Добавлено в контакты');
+                }
+            } else {
+                showToast(data.error || 'Ошибка');
+            }
+        })
+        .catch(() => showToast('Ошибка соединения'))
+        .finally(() => { btn.disabled = false; });
+}
+
 function showToast(text) {
     const t = document.getElementById('toast');
     t.textContent = text;
