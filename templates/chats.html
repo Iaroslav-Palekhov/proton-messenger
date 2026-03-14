@@ -854,9 +854,6 @@
                             </div>
                         </div>
                     </a>
-                    <button class="delete-chat-btn" onclick="event.preventDefault(); event.stopPropagation(); deleteChat({{ chat.id }}, '{{ chat.other_user.username }}')" title="Удалить чат">
-                        <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg>
-                    </button>
                 </div>
                 {% elif chat.type == 'group' %}
                 <div class="chat-item-wrapper" data-chat-id="{{ chat.id }}" data-type="group">
@@ -1022,6 +1019,94 @@
 </div>
 
 <script>
+    /* ===== КОНТЕКСТНОЕ МЕНЮ ЧАТОВ (ПКМ / долгое удержание) ===== */
+    let _chatCtxMenu = null;
+    let _chatLongTimer = null;
+    let _chatLongTarget = null;
+
+    function createChatContextMenu() {
+        if (_chatCtxMenu) return _chatCtxMenu;
+        const el = document.createElement('div');
+        el.id = 'chatContextMenu';
+        el.style.cssText = `
+            position: fixed; background: var(--bg-secondary); border-radius: 12px;
+            padding: 6px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); z-index: 9999;
+            display: none; flex-direction: column; gap: 2px; min-width: 180px;
+            border: 1px solid var(--border);
+        `;
+        document.body.appendChild(el);
+        _chatCtxMenu = el;
+        return el;
+    }
+
+    function showChatContextMenu(e, wrapperEl) {
+        const chatId = wrapperEl.dataset.chatId;
+        const chatType = wrapperEl.dataset.type;
+        if (chatType !== 'private' || !chatId) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const nameEl = wrapperEl.querySelector('h3');
+        const chatName = nameEl ? nameEl.textContent.trim() : 'чат';
+
+        const menu = createChatContextMenu();
+        menu.innerHTML = `
+            <button onclick="hideChatContextMenu(); deleteChat(${chatId}, '${chatName.replace(/'/g, "\\'")}')"
+                style="background:transparent;border:none;color:var(--danger);font-size:14px;padding:10px 14px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:10px;text-align:left;width:100%;transition:background 0.15s;"
+                onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'">
+                <svg width="18" height="18" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg>
+                <span>Удалить чат</span>
+            </button>
+        `;
+
+        menu.style.display = 'flex';
+        const menuW = 190, menuH = 52;
+        let x = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : window.innerWidth / 2);
+        let y = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : window.innerHeight / 2);
+        if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8;
+        if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 8;
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+    }
+
+    function hideChatContextMenu() {
+        if (_chatCtxMenu) _chatCtxMenu.style.display = 'none';
+    }
+
+    // Делегирование — ПКМ
+    document.addEventListener('contextmenu', e => {
+        const wrapper = e.target.closest('.chat-item-wrapper[data-type="private"]');
+        if (wrapper) showChatContextMenu(e, wrapper);
+        else hideChatContextMenu();
+    });
+
+    // Долгое удержание на мобильных
+    document.addEventListener('touchstart', e => {
+        const wrapper = e.target.closest('.chat-item-wrapper[data-type="private"]');
+        if (!wrapper) return;
+        _chatLongTarget = { wrapper, touch: e.touches[0] };
+        _chatLongTimer = setTimeout(() => {
+            if (_chatLongTarget) {
+                const fakeE = {
+                    preventDefault: ()=>{}, stopPropagation: ()=>{},
+                    clientX: _chatLongTarget.touch.clientX,
+                    clientY: _chatLongTarget.touch.clientY
+                };
+                showChatContextMenu(fakeE, _chatLongTarget.wrapper);
+                _chatLongTarget = null;
+            }
+        }, 500);
+    }, { passive: true });
+
+    document.addEventListener('touchend', () => { clearTimeout(_chatLongTimer); _chatLongTarget = null; });
+    document.addEventListener('touchmove', () => { clearTimeout(_chatLongTimer); _chatLongTarget = null; });
+
+    // Скрытие при клике вне
+    document.addEventListener('click', e => {
+        if (_chatCtxMenu && !_chatCtxMenu.contains(e.target)) hideChatContextMenu();
+    });
+
     /* ===== DRAWER (боковое меню) ===== */
     function openDrawer() {
         document.getElementById('drawer').classList.add('active');
@@ -1283,9 +1368,6 @@
                                 </div>
                             </div>
                         </a>
-                        <button class="delete-chat-btn" onclick="event.preventDefault(); event.stopPropagation(); deleteChat(${chat.id}, '${chat.other_username}')" title="Удалить чат">
-                            <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-delete"></use></svg>
-                        </button>
                     </div>`;
                 } else if (chat.type === 'group') {
                     html += `

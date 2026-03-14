@@ -70,8 +70,8 @@ class Config:
         'application/javascript', 'application/json',
         'text/plain', 'image/svg+xml'
     ]
-    COMPRESS_LEVEL = 6        # Баланс скорость/размер (1-9)
-    COMPRESS_MIN_SIZE = 500   # Сжимаем только если > 500 байт
+    COMPRESS_LEVEL = 9       # Баланс скорость/размер (1-9)
+    COMPRESS_MIN_SIZE = 100   # Сжимаем только если > 500 байт
 
     # Push-уведомления (ntfy)
     NTFY_SERVER = os.environ.get('NTFY_SERVER', 'https://ntfy.sh')
