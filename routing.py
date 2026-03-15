@@ -1459,6 +1459,19 @@ def register_routes(app, db, login_manager):
         db.session.add(forwarded_record)
         db.session.commit()
 
+        # Эмитим WS-событие new_message — получатели увидят пересланное сообщение мгновенно
+        try:
+            from socketio_events import socketio as _sio, _serialize_message, _emit_chat_update, _emit_group_update
+            payload = _serialize_message(forwarded_message, current_user.id, app)
+            if forwarded_message.chat_id:
+                _sio.emit('new_message', payload, to=f'chat_{forwarded_message.chat_id}')
+                _emit_chat_update(forwarded_message.chat_id, forwarded_message, forwarded_message.receiver_id)
+            elif forwarded_message.group_id:
+                _sio.emit('new_message', payload, to=f'group_{forwarded_message.group_id}')
+                _emit_group_update(forwarded_message.group_id, forwarded_message)
+        except Exception:
+            pass  # Не блокируем ответ если WS недоступен
+
         return jsonify({
             'success': True,
             'message_id': forwarded_message.id,
@@ -1503,8 +1516,9 @@ def register_routes(app, db, login_manager):
     @app.route('/get_messages/<int:chat_id>')
     @login_required
     def get_messages(chat_id):
-        last_id  = request.args.get('last_id', 0, type=int)
-        is_group = request.args.get('is_group', False, type=bool)
+        last_id   = request.args.get('last_id',   0, type=int)
+        before_id = request.args.get('before_id', 0, type=int)
+        is_group  = request.args.get('is_group', False, type=bool)
 
         if is_group:
             group      = Group.query.get_or_404(chat_id)
@@ -1516,15 +1530,18 @@ def register_routes(app, db, login_manager):
             if not membership:
                 return jsonify({'error': 'Нет доступа'}), 403
 
-            messages = Message.query.filter(
+            q = Message.query.filter(
                 Message.group_id == chat_id,
-                Message.id > last_id,
                 Message.is_deleted == False
             ).options(
                 joinedload(Message.sender),
                 joinedload(Message.reply_to),
                 joinedload(Message.forwarded_from)
-            ).order_by(Message.timestamp).all()
+            )
+            if before_id:
+                messages = list(reversed(q.filter(Message.id < before_id).order_by(Message.timestamp.desc()).limit(30).all()))
+            else:
+                messages = q.filter(Message.id > last_id).order_by(Message.timestamp).all()
 
             for msg in messages:
                 if msg.sender_id != current_user.id and not msg.is_read:
@@ -1536,15 +1553,18 @@ def register_routes(app, db, login_manager):
             if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
                 return jsonify({'error': 'Нет доступа'}), 403
 
-            messages = Message.query.filter(
+            q = Message.query.filter(
                 Message.chat_id == chat_id,
-                Message.id > last_id,
                 Message.is_deleted == False
             ).options(
                 joinedload(Message.sender),
                 joinedload(Message.reply_to),
                 joinedload(Message.forwarded_from)
-            ).order_by(Message.timestamp).all()
+            )
+            if before_id:
+                messages = list(reversed(q.filter(Message.id < before_id).order_by(Message.timestamp.desc()).limit(30).all()))
+            else:
+                messages = q.filter(Message.id > last_id).order_by(Message.timestamp).all()
 
             for msg in messages:
                 if msg.receiver_id == current_user.id and not msg.is_read:

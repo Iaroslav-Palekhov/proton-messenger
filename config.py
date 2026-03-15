@@ -48,7 +48,7 @@ class Config:
     ALLOWED_EXTENSIONS = None
 
     # Сессии и куки
-    PERMANENT_SESSION_LIFETIME = timedelta(days=7)
+    PERMANENT_SESSION_LIFETIME = timedelta(days=30)
     SESSION_COOKIE_HTTPONLY = True       # JS не может читать cookie
     SESSION_COOKIE_SAMESITE = 'Lax'     # Защита от CSRF
     SESSION_COOKIE_SECURE = False        # True только при HTTPS

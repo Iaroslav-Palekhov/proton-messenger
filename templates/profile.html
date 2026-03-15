@@ -103,12 +103,8 @@
         </div>
 
         <h1 class="profile-name">{{ profile_user.username }}</h1>
-        <div class="profile-bio" style="white-space: pre-wrap; word-break: break-word;">
-            {% if profile_user.bio %}
-                {{ profile_user.bio }}
-            {% else %}
-                <span style="color: var(--text-muted);">Нет информации о себе</span>
-            {% endif %}
+        <div class="profile-bio" style="word-break: break-word; text-align: center; white-space: pre-line;">
+{%- if profile_user.bio %}{{ profile_user.bio | trim }}{% else %}<span style="color: var(--text-muted);">Нет информации о себе</span>{% endif %}
         </div>
 
         <div class="profile-stats">
@@ -132,13 +128,13 @@
             </div>
             <div class="stat-item">
                 <div class="stat-value">
-                    <span class="status {{ profile_user.status }}"></span>
+                    <span class="status {{ profile_user.status }}" id="profileStatusDot"></span>
                 </div>
-                <div class="stat-label">
+                <div class="stat-label" id="profileStatusLabel">
                     {% if profile_user.status == 'online' %}
-                        Онлайн
+                        В сети
                     {% else %}
-                        Был(а) {{ profile_user.last_seen.strftime('%d.%m.%Y %H:%M') }}
+                        Был(а) {{ profile_user.last_seen.strftime('%d.%m.%Y %H:%M') if profile_user.last_seen else 'давно' }}
                     {% endif %}
                 </div>
             </div>
@@ -254,6 +250,29 @@
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+
+<script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+<script>
+(function() {
+    var UID = {{ profile_user.id }};
+    var s = io({ transports: ['websocket'], reconnectionDelay: 2000, reconnectionAttempts: 5 });
+    s.on('connect', function() { s.emit('heartbeat'); });
+    s.on('user_status', function(d) {
+        if (d.user_id != UID) return;
+        var dot = document.getElementById('profileStatusDot');
+        var lbl = document.getElementById('profileStatusLabel');
+        if (!dot || !lbl) return;
+        if (d.status === 'online') {
+            dot.className = 'status online';
+            lbl.textContent = 'В сети';
+        } else {
+            dot.className = 'status offline';
+            lbl.textContent = d.last_seen ? 'Был(а) ' + d.last_seen : 'Давно не был(а)';
+        }
+    });
+    setInterval(function() { if (document.visibilityState === 'visible') s.emit('heartbeat'); }, 20000);
+})();
+</script>
 
 <script>
 function toggleContact(userId, inContacts) {

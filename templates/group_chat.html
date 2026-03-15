@@ -9,8 +9,9 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     var isPriv = (typeof IS_PRIVILEGED !== 'undefined') ? IS_PRIVILEGED : false;
-    document.querySelectorAll('.message-content p').forEach(function(p) {
-        var html = p.innerHTML;
+    // Обрабатываем и <p> и <div class="message-text"> (серверный рендер)
+    document.querySelectorAll('.message-content p, .message-content .message-text').forEach(function(el) {
+        var html = el.innerHTML;
         if (html.indexOf('```') !== -1 || html.indexOf('`') !== -1) {
             var text = html
                 .replace(/<br\s*\/?>/gi, '\n')
@@ -21,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var wrapper = document.createElement('div');
             wrapper.className = 'message-text';
             wrapper.innerHTML = renderContent(text, isPriv);
-            p.parentNode.replaceChild(wrapper, p);
+            el.parentNode.replaceChild(wrapper, el);
         }
     });
     applyHighlighting(document.getElementById('messagesContainer'));
@@ -845,6 +846,12 @@ document.addEventListener('DOMContentLoaded', function() {
         0% { background: rgba(0, 168, 132, 0.3); }
         100% { background: transparent; }
     }
+    .message.reply-target .message-bubble {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+        border-radius: 18px;
+        transition: outline 0.2s;
+    }
 
     @keyframes slideIn {
         from {
@@ -1123,12 +1130,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Переменные состояния
     let lastMessageId = {{ messages[-1].id if messages else 0 }};
+    let firstMessageId = {{ messages[0].id if messages else 0 }};
     let isScrolledUp = false;
     let scrollPosition = 0;
     let currentGroupId = {{ group.id }};
     let replyToId = null;
     let isSending = false;
     let sendingMessageId = null;
+    let isLoadingOlder = false;
+    let noMoreOlderMessages = false;
 
     // Исправлено: проверяем наличие pinned_messages
     let pinnedMessages = {% if pinned_messages %}{{ pinned_messages|tojson|safe }}{% else %}[]{% endif %};
@@ -1221,9 +1231,11 @@ document.addEventListener('DOMContentLoaded', function() {
         initGroupWebSocket();
     };
 
-    // Отслеживание прокрутки
-    const container = document.getElementById('messagesContainer');
-    if (container) {
+    // Отслеживание прокрутки + подгрузка старых сообщений
+    // (навешиваем после DOMContentLoaded — элемент рендерится позже скрипта)
+    document.addEventListener('DOMContentLoaded', function() {
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
         container.addEventListener('scroll', function() {
             const scrollTop = this.scrollTop;
             const scrollHeight = this.scrollHeight;
@@ -1235,7 +1247,65 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 isScrolledUp = false;
             }
+            // Подгрузка старых сообщений при скролле вверх
+            if (scrollTop < 80 && !isLoadingOlder && !noMoreOlderMessages && firstMessageId > 0) {
+                loadOlderMessages();
+            }
         });
+    });
+
+    // Подгрузка старых сообщений
+    function loadOlderMessages() {
+        isLoadingOlder = true;
+        const container = document.getElementById('messagesContainer');
+
+        let loader = document.getElementById('olderMessagesLoader');
+        if (!loader) {
+            loader = document.createElement('div');
+            loader.id = 'olderMessagesLoader';
+            loader.style.cssText = 'text-align:center;padding:10px;color:var(--text-muted);font-size:13px;';
+            loader.innerHTML = '<svg width="18" height="18" viewBox="0 0 1024 1024" class="spinning" style="vertical-align:middle;margin-right:6px;"><use xlink:href="#icon-loading"></use></svg>Загрузка...';
+            container.insertBefore(loader, container.firstChild);
+        }
+
+        const prevScrollHeight = container.scrollHeight;
+
+        fetch(`/get_messages/${currentGroupId}?before_id=${firstMessageId}&is_group=true`)
+            .then(r => r.json())
+            .then(messages => {
+                loader.remove();
+                if (!messages.length) {
+                    noMoreOlderMessages = true;
+                    isLoadingOlder = false;
+                    if (!document.getElementById('chatStartLabel')) {
+                        const lbl = document.createElement('div');
+                        lbl.id = 'chatStartLabel';
+                        lbl.style.cssText = 'text-align:center;padding:12px;color:var(--text-muted);font-size:13px;';
+                        lbl.textContent = '— начало переписки —';
+                        container.insertBefore(lbl, container.firstChild);
+                    }
+                    return;
+                }
+                const fragment = document.createDocumentFragment();
+                messages.forEach(msg => {
+                    if (!document.querySelector(`.message[data-message-id="${msg.id}"]`)) {
+                        const tmp = document.createElement('div');
+                        tmp.innerHTML = buildMessageHtml(msg);
+                        while (tmp.firstChild) fragment.appendChild(tmp.firstChild);
+                    }
+                });
+                container.insertBefore(fragment, container.firstChild);
+                applyHighlighting(container);
+                firstMessageId = messages[0].id;
+                const newScrollHeight = container.scrollHeight;
+                container.scrollTop = newScrollHeight - prevScrollHeight;
+                isLoadingOlder = false;
+            })
+            .catch(err => {
+                console.error('[GroupChat] Ошибка подгрузки старых:', err);
+                if (loader.parentNode) loader.remove();
+                isLoadingOlder = false;
+            });
     }
 
     // Загрузка пропущенных сообщений при переподключении WS
@@ -1291,7 +1361,8 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('new_message', (message) => {
             if (message.id > lastMessageId) lastMessageId = message.id;
 
-            if (message.sender_id == {{ current_user.id }}) {
+            // Пересланные сообщения не имеют temp-элемента — обрабатываем как входящие
+            if (message.sender_id == {{ current_user.id }} && !message.is_forwarded) {
                 const tempEl = sendingMessageId
                     ? document.querySelector(`.message[data-message-id="${sendingMessageId}"]`)
                     : document.querySelector('.message[data-message-id^="temp_"]');
@@ -1413,15 +1484,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
 
-    function addMessageToChat(message) {
-        if (document.querySelector(`.message[data-message-id="${message.id}"]`)) {
-            return;
-        }
-
-        const container = document.getElementById('messagesContainer');
+    function buildMessageHtml(message) {
         const isSent = message.sender_id == {{ current_user.id }};
-
-        // HTML для ответа на сообщение
         let replyHtml = '';
         if (message.reply_to) {
             let replyContent = '';
@@ -1429,168 +1493,46 @@ document.addEventListener('DOMContentLoaded', function() {
                 replyContent = escapeHtml(message.reply_to.content);
                 if (replyContent.length > 50) replyContent = replyContent.substring(0, 50) + '...';
             } else if (message.reply_to.has_image) {
-                replyContent = '<svg width="16" height="16" viewBox="0 0 1024 1024" style="vertical-align: middle; margin-right: 4px;"><use xlink:href="#icon-image"></use></svg> Фото';
+                replyContent = '<svg width="16" height="16" viewBox="0 0 1024 1024" style="vertical-align:middle;margin-right:4px;"><use xlink:href="#icon-image"></use></svg> Фото';
             } else if (message.reply_to.has_file) {
-                replyContent = '<svg width="16" height="16" viewBox="0 0 1024 1024" style="vertical-align: middle; margin-right: 4px;"><use xlink:href="#icon-file"></use></svg> ' + escapeHtml(message.reply_to.file_name || 'Файл');
+                replyContent = '<svg width="16" height="16" viewBox="0 0 1024 1024" style="vertical-align:middle;margin-right:4px;"><use xlink:href="#icon-file"></use></svg> ' + escapeHtml(message.reply_to.file_name || 'Файл');
             }
-
-            replyHtml = `
-                <div class="reply-preview" onclick="scrollToMessage(${message.reply_to.id})">
-                    <div class="reply-sender">${escapeHtml(message.reply_to.sender_name)}</div>
-                    <div class="reply-content">${replyContent}</div>
-                </div>
-            `;
+            replyHtml = `<div class="reply-preview" onclick="scrollToMessage(${message.reply_to.id})"><div class="reply-sender">${escapeHtml(message.reply_to.sender_name)}</div><div class="reply-content">${replyContent}</div></div>`;
         }
-
-        // HTML для пересланного сообщения
         let forwardedHtml = '';
         if (message.is_forwarded) {
-            forwardedHtml = `
-                <div class="forwarded-header">
-                    <span>
-                        <svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align: middle; margin-right: 4px;">
-                            <use xlink:href="#icon-group"></use>
-                        </svg>
-                        Переслано
-                    </span>
-                    ${message.show_forward_sender && message.forwarded_from ?
-                        `<span>от ${escapeHtml(message.forwarded_from.sender_name)}</span>` : ''}
-                </div>
-            `;
+            forwardedHtml = `<div class="forwarded-header"><span><svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:4px;"><use xlink:href="#icon-group"></use></svg>Переслано</span>${message.show_forward_sender && message.forwarded_from ? `<span>от ${escapeHtml(message.forwarded_from.sender_name)}</span>` : ''}</div>`;
         }
-
-        // HTML для контента сообщения
         let contentHtml = '';
         if (message.image_path) {
-            const imgUrl = resolveFileUrl(message.image_path);
-            contentHtml = `<img src="${imgUrl}" alt="Изображение" class="message-image" onclick="openImageModal(this.src)">`;
-        }
-        else if (message.file_path) {
-            let fileIcon = '';
-            if (message.file_icon === 'pdf' || (message.file_name && message.file_name.toLowerCase().endsWith('.pdf'))) {
-                fileIcon = '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-pdf"></use></svg>';
-            } else if (message.file_icon === 'zip' || (message.file_name && ['.zip', '.rar', '.7z'].some(ext => message.file_name.toLowerCase().endsWith(ext)))) {
-                fileIcon = '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-zip"></use></svg>';
-            } else if (message.file_icon === 'image' || (message.file_name && ['.jpg', '.jpeg', '.png', '.gif', '.webp'].some(ext => message.file_name.toLowerCase().endsWith(ext)))) {
-                fileIcon = '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-image"></use></svg>';
-            } else {
-                fileIcon = '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-file"></use></svg>';
-            }
-            const fileUrl = resolveDownloadUrl(message.file_path);
+            contentHtml = `<img src="${resolveFileUrl(message.image_path)}" alt="Изображение" class="message-image" onclick="openImageModal(this.src)">`;
+        } else if (message.file_path) {
             const fn = message.file_name || 'Файл';
             const fext = fn.split('.').pop().toLowerCase();
-
-            // Аудиофайлы — встроенный плеер
-            if (['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'webm'].includes(fext)) {
-                contentHtml = `<div class="audio-player" data-src="${fileUrl}">
-                    <button class="audio-play-btn" onclick="toggleAudio(this)" title="Воспроизвести">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-                    </button>
-                    <div class="audio-progress-wrap">
-                        <input type="range" class="audio-progress" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this)">
-                        <span class="audio-time">0:00</span>
-                    </div>
-                    <audio src="${fileUrl}" preload="none" style="display:none;"></audio>
-                </div>`;
+            const fileUrl = resolveDownloadUrl(message.file_path);
+            if (['mp3','ogg','wav','m4a','aac','opus','webm'].includes(fext)) {
+                contentHtml = `<div class="audio-player" data-src="${fileUrl}"><button class="audio-play-btn" onclick="toggleAudio(this)"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button><div class="audio-progress-wrap"><input type="range" class="audio-progress" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this)"><span class="audio-time">0:00</span></div><audio src="${fileUrl}" preload="none" style="display:none;"></audio></div>`;
             } else {
-                contentHtml = `
-                    <div class="file-message" onclick="downloadFile('${fileUrl}', '${escapeHtml(fn)}')">
-                        <span class="file-icon">${fileIcon}</span>
-                        <div class="file-info">
-                            <div class="file-name">${escapeHtml(fn)}</div>
-                            <div class="file-size">${message.file_size || '0 KB'}</div>
-                        </div>
-                        <span style="font-size: 20px;">
-                            <svg width="20" height="20" viewBox="0 0 1024 1024">
-                                <use xlink:href="#icon-attach"></use>
-                            </svg>
-                        </span>
-                    </div>`;
+                let fileIcon = (message.file_icon === 'pdf' || fext === 'pdf') ? '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-pdf"></use></svg>' : (message.file_icon === 'zip' || ['zip','rar','7z'].includes(fext)) ? '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-zip"></use></svg>' : (message.file_icon === 'image' || ['jpg','jpeg','png','gif','webp'].includes(fext)) ? '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-image"></use></svg>' : '<svg width="32" height="32" viewBox="0 0 1024 1024"><use xlink:href="#icon-file"></use></svg>';
+                contentHtml = `<div class="file-message" onclick="downloadFile('${fileUrl}','${escapeHtml(fn)}')"><span class="file-icon">${fileIcon}</span><div class="file-info"><div class="file-name">${escapeHtml(fn)}</div><div class="file-size">${message.file_size||'0 KB'}</div></div><span style="font-size:20px;"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-attach"></use></svg></span></div>`;
             }
-        }
-        else if (message.content) {
-            // Роль отправителя: если сервер передаёт — используем, иначе IS_PRIVILEGED текущего юзера
+        } else if (message.content) {
             var senderPriv = (message.sender_role === 'owner' || message.sender_role === 'admin');
             contentHtml = `<div class="message-text">${renderContent(message.content, senderPriv)}</div>`;
         }
-
-        // Превью ссылки
-        let linkPreviewHtml = '';
         if (message.link_url) {
-            linkPreviewHtml = `
-                <div class="link-preview" onclick="window.open('${escapeHtml(message.link_url)}', '_blank')">
-                    ${message.link_image ? `
-                    <div class="link-preview-image">
-                        <img src="${escapeHtml(message.link_image)}" alt="" onerror="this.parentElement.style.display='none'">
-                    </div>` : ''}
-                    <div class="link-preview-content">
-                        ${message.link_title ? `
-                        <div class="link-preview-title">${escapeHtml(message.link_title)}</div>` : ''}
-                        ${message.link_description ? `
-                        <div class="link-preview-description">${escapeHtml(message.link_description.substring(0, 200))}${message.link_description.length > 200 ? '...' : ''}</div>` : ''}
-                        <div class="link-preview-url">${escapeHtml(message.link_url)}</div>
-                    </div>
-                </div>
-            `;
+            contentHtml += `<div class="link-preview" onclick="window.open('${escapeHtml(message.link_url)}','_blank')">${message.link_image?`<div class="link-preview-image"><img src="${escapeHtml(message.link_image)}" alt="" onerror="this.parentElement.style.display='none'"></div>`:''}<div class="link-preview-content">${message.link_title?`<div class="link-preview-title">${escapeHtml(message.link_title)}</div>`:''}<div class="link-preview-url">${escapeHtml(message.link_url)}</div></div></div>`;
         }
+        const readStatus = isSent ? `<span class="read-status" title="${message.is_read?'Прочитано':'Отправлено'}">${message.is_read?'<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-eye"></use></svg>':'<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-check"></use></svg>'}</span>` : '';
+        const senderAvatar = isSent ? '' : `<img src="${message.sender_avatar||'/static/uploads/avatars/default.png'}" alt="Avatar" class="message-avatar" onerror="this.src='/static/uploads/avatars/default.png'" onclick="window.location.href='/profile/${message.sender_id}'">`;
+        const senderName = isSent ? '' : `<div style="font-weight:600;margin-bottom:4px;color:var(--accent);">${escapeHtml(message.sender_name||message.sender_username)}</div>`;
+        return `<div class="message ${isSent?'sent':'received'}" data-message-id="${message.id}"><div class="message-wrapper">${senderAvatar}<div class="message-bubble">${senderName}${replyHtml}${forwardedHtml}<div class="message-content">${contentHtml}</div><div class="message-meta"><span>${message.timestamp}</span>${message.is_edited?'<span>отредактировано</span>':''}${readStatus}</div><div class="message-actions"><button class="message-action-btn" onclick="replyToMessage(${message.id})" title="Ответить"><svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-back"></use></svg></button><button class="message-action-btn" onclick="forwardMessage(${message.id})" title="Переслать"><svg width="20" height="20" viewBox="0 0 24 24"><use xlink:href="#icon-group"></use></svg></button></div></div></div></div>`;
+    }
 
-        // Объединяем контент + превью ссылок
-        contentHtml = contentHtml + linkPreviewHtml;
-
-        // HTML для аватара и имени отправителя
-        let senderAvatar = '';
-        let senderName = '';
-        if (!isSent) {
-            senderAvatar = `<img src="${message.sender_avatar || '/static/uploads/avatars/default.png'}"
-                alt="Avatar"
-                class="message-avatar"
-                onerror="this.src='/static/uploads/avatars/default.png'"
-                onclick="window.location.href='/profile/${message.sender_id}'">`;
-            senderName = `<div style="font-weight: 600; margin-bottom: 4px; color: var(--accent);">${escapeHtml(message.sender_name || message.sender_username)}</div>`;
-        }
-
-        // HTML для статуса прочтения
-        const readStatus = isSent ? `
-            <span class="read-status" title="${message.is_read ? 'Прочитано' : 'Отправлено'}">
-                ${message.is_read ?
-                    '<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-eye"></use></svg>' :
-                    '<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-check"></use></svg>'}
-            </span>` : '';
-
-        // Полный HTML сообщения
-        const messageHtml = `
-            <div class="message ${isSent ? 'sent' : 'received'}" data-message-id="${message.id}">
-                <div class="message-wrapper">
-                    ${!isSent ? senderAvatar : ''}
-                    <div class="message-bubble">
-                        ${!isSent ? senderName : ''}
-                        ${replyHtml}
-                        ${forwardedHtml}
-                        <div class="message-content">
-                            ${contentHtml}
-                        </div>
-                        <div class="message-meta">
-                            <span>${message.timestamp}</span>
-                            ${message.is_edited ? '<span>отредактировано</span>' : ''}
-                            ${readStatus}
-                        </div>
-                        <div class="message-actions">
-                            <button class="message-action-btn" onclick="replyToMessage(${message.id})" title="Ответить">
-                                <svg width="20" height="20" viewBox="0 0 1024 1024">
-                                    <use xlink:href="#icon-back"></use>
-                                </svg>
-                            </button>
-                            <button class="message-action-btn" onclick="forwardMessage(${message.id})" title="Переслать">
-                                <svg width="20" height="20" viewBox="0 0 24 24">
-                                    <use xlink:href="#icon-group"></use>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-
-        container.insertAdjacentHTML('beforeend', messageHtml);
+    function addMessageToChat(message) {
+        if (document.querySelector(`.message[data-message-id="${message.id}"]`)) return;
+        const container = document.getElementById('messagesContainer');
+        container.insertAdjacentHTML('beforeend', buildMessageHtml(message));
     }
 
     // Функция отправки сообщения
@@ -2248,15 +2190,24 @@ document.addEventListener('DOMContentLoaded', function() {
             const contentEl = messageElement.querySelector('.message-content');
             let replyContentPreview = '';
             if (contentEl) {
-                const p = contentEl.querySelector('p');
                 const img = contentEl.querySelector('.message-image');
                 const file = contentEl.querySelector('.file-name');
-                if (p) replyContentPreview = p.textContent.trim().substring(0, 50);
-                else if (img) replyContentPreview = '📷 Фото';
-                else if (file) replyContentPreview = '📎 ' + file.textContent.trim();
+                if (img) {
+                    replyContentPreview = '📷 Фото';
+                } else if (file) {
+                    replyContentPreview = '📎 ' + file.textContent.trim();
+                } else {
+                    // Ищем текст: .message-text → p → весь textContent
+                    const textEl = contentEl.querySelector('.message-text') || contentEl.querySelector('p');
+                    replyContentPreview = (textEl ? textEl.textContent.trim() : contentEl.textContent.trim()).substring(0, 80);
+                }
             }
 
             window._replyData = { id: messageId, sender_name: replySenderName, preview: replyContentPreview };
+
+            // Подсвечиваем сообщение на которое отвечаем
+            document.querySelectorAll('.message.reply-target').forEach(el => el.classList.remove('reply-target'));
+            messageElement.classList.add('reply-target');
         }
 
         const indicator = document.getElementById('replyIndicator');
@@ -2288,6 +2239,7 @@ document.addEventListener('DOMContentLoaded', function() {
         replyToId = null;
         window._replyData = null;
         document.getElementById('messageInput').placeholder = 'Введите сообщение...';
+        document.querySelectorAll('.message.reply-target').forEach(el => el.classList.remove('reply-target'));
     }
 
     // Пересылка сообщения

@@ -440,7 +440,7 @@ class InputSanitizer:
     PATH_TRAVERSAL = re.compile(r'\.\.[/\\]')
 
     @classmethod
-    def sanitize_text(cls, text: str, max_length: int = 4000) -> str:
+    def sanitize_text(cls, text: str, max_length: int = 20000) -> str:
         """
         Очищает текстовое сообщение от XSS и других угроз.
         НЕ удаляет HTML-теги полностью — пользователь может отправлять < и >,

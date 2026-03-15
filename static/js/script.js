@@ -43,16 +43,16 @@
     function applyAll(themePref, accentKey) {
         var resolved = resolveTheme(themePref);
         document.documentElement.setAttribute('data-theme', resolved);
-        applyAccent(accentKey || 'green', resolved);
+        applyAccent(accentKey || 'purple', resolved);
     }
 
     window.ThemeManager = {
         get: function () {
-            return { theme: getCookie('theme') || 'system', accent: getCookie('accent') || 'green' };
+            return { theme: getCookie('theme') || 'system', accent: getCookie('accent') || 'purple' };
         },
         setTheme: function (pref) {
             setCookie('theme', pref);
-            applyAll(pref, getCookie('accent') || 'green');
+            applyAll(pref, getCookie('accent') || 'purple');
             document.querySelectorAll('[data-theme-btn]').forEach(function (btn) {
                 btn.classList.toggle('active', btn.getAttribute('data-theme-btn') === pref);
             });
@@ -67,11 +67,11 @@
         palettes: ACCENT_PALETTES
     };
 
-    applyAll(getCookie('theme') || 'system', getCookie('accent') || 'green');
+    applyAll(getCookie('theme') || 'system', getCookie('accent') || 'purple');
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
         if ((getCookie('theme') || 'system') === 'system') {
-            applyAll('system', getCookie('accent') || 'green');
+            applyAll('system', getCookie('accent') || 'purple');
         }
     });
 
