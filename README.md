@@ -233,6 +233,23 @@ pip install -r requirements.txt
 python papirus.py
 ```
 
+**Android:**
+
+```
+# Скачайте приложение
+https://github.com/Iaroslav-Palekhov/gamma-server-android/releases/download/Release/gamma-server-arm64_v8a.apk
+
+# Скачайте termux
+
+# скачайте ntfy server
+
+error
+
+# Выполните в термуксе termux-setup-storage и разрешите доступ к файлам потом скопируйте и запустите сервис уведомлений
+
+# Потом запустите и сервер мессенджера и готово
+```
+
 После запуска откройте браузер по адресу: **http://localhost:2200**
 
 При первом старте автоматически создаются папки для загрузки файлов, дефолтные аватарки, база данных SQLite (`database.db`) и файл `.secret_key` с криптографически стойким ключом (права `0o600`).
