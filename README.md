@@ -1,4 +1,4 @@
-# Papirus Messenger
+# Proton Messenger
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?cacheSeconds=2592000)
 ![Flask](https://img.shields.io/badge/Flask-2.3.3-green.svg)
