@@ -1405,10 +1405,19 @@
         if (chatsList.innerHTML !== html) {
             chatsList.innerHTML = html;
             chatsList.scrollTop = scrollTop;
+            // Обновляем превью черновиков после перерисовки списка
+            if (typeof Drafts !== 'undefined') Drafts.renderDraftPreviews();
         }
     }
 
     document.addEventListener('DOMContentLoaded', startAutoRefresh);
+
+    // Черновики — показываем превью в списке чатов
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof Drafts !== 'undefined') {
+            Drafts.renderDraftPreviews();
+        }
+    });
 </script>
 
 </div>{# /mobile-layout #}

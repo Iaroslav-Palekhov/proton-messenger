@@ -1072,8 +1072,7 @@ function sendMessage() {
         const fileText = input.value;
         isSending = true;
         sendButton.disabled = true;
-        
-        
+        if (typeof Drafts !== 'undefined') Drafts.remove(Drafts.keyPrivate(CHAT_ID));
         
         input.value = ''; input.style.height = 'auto';
         const tempId = 'temp_' + Date.now();
@@ -1148,8 +1147,7 @@ function sendMessage() {
     // Текст — только WebSocket
     isSending = true;
     sendButton.disabled = true;
-    
-    
+    if (typeof Drafts !== 'undefined') Drafts.remove(Drafts.keyPrivate(CHAT_ID));
     
     input.value = ''; input.style.height = 'auto';
 
@@ -2306,14 +2304,21 @@ function initWebSocket() {
 }
 
 /* =====================================================
-   ОТПРАВКА СООБЩЕНИЯ
+   ЧЕРНОВИКИ — инициализация
 ===================================================== */
-// Обновляем при выборе файла
 document.addEventListener('DOMContentLoaded', () => {
+    const mi = document.getElementById('messageInput');
+    if (typeof Drafts !== 'undefined' && mi) {
+        const _draftKey = Drafts.keyPrivate(CHAT_ID);
+        Drafts.initInput(_draftKey, mi, autoResizeTextarea);
+    }
     const fi = document.getElementById('fileInput');
     if (fi) fi.addEventListener('change', () => {});
-    const mi = document.getElementById('messageInput');
 });
+
+/* =====================================================
+   ОТПРАВКА СООБЩЕНИЯ
+===================================================== */
 
 /* =====================================================
    АУДИОПЛЕЕР

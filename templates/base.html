@@ -83,6 +83,7 @@
     
     {% block scripts %}
     <!-- JS грузим defer — не блокирует рендер -->
+    <script defer src="{{ url_for('static', filename='js/drafts.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/script.js') }}"></script>
     <script defer>
 document.addEventListener('DOMContentLoaded',function(){

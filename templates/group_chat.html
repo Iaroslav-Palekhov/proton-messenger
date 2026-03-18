@@ -1580,8 +1580,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const fileText = input.value;
             isSending = true;
             sendButton.disabled = true;
-            
-            
+            if (typeof Drafts !== 'undefined') Drafts.remove(Drafts.keyGroup(currentGroupId));
             
             input.value = '';
             const tempId = 'temp_' + Date.now();
@@ -1666,8 +1665,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Текст — только WebSocket
         isSending = true;
         sendButton.disabled = true;
-        
-        
+        if (typeof Drafts !== 'undefined') Drafts.remove(Drafts.keyGroup(currentGroupId));
         
         input.value = '';
 
@@ -2077,6 +2075,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        // Черновик для группового чата
+        const miDraft = document.getElementById('messageInput');
+        if (typeof Drafts !== 'undefined' && miDraft) {
+            Drafts.initInput(Drafts.keyGroup(currentGroupId), miDraft, autoResizeTextarea);
+        }
+
         const container = document.getElementById('messagesContainer');
         if (!container) return;
 
