@@ -12,10 +12,10 @@ echo "Python3 найден: $(python3 --version)"
 sudo apt install python3-venv -y
 
 echo "Скачивание репозитория"
-git clone https://github.com/Iaroslav-Palekhov/gamma-messenger.git
+git clone https://github.com/Iaroslav-Palekhov/proton-messenger.git
 echo "Скачано. Переходим в gamma-messenger/"
 
-cd gamma-messenger/
+cd proton-messenger/
 
 if [ ! -d "venv" ]; then
     echo "Создание виртуального окружения..."
