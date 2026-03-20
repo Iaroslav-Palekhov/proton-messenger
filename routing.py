@@ -1,6 +1,6 @@
 from flask import render_template, request, jsonify, redirect, url_for, send_from_directory, session
 from flask_login import login_user, login_required, logout_user, current_user
-from werkzeug.security import generate_password_hash, check_password_hash
+from security import PasswordSecurity
 from datetime import datetime, timedelta
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
@@ -184,7 +184,7 @@ def register_routes(app, db, login_manager):
             if User.query.filter_by(username=username).first():
                 return render_template('register.html', error='Имя пользователя уже занято')
 
-            hashed_password = generate_password_hash(password)
+            hashed_password = PasswordSecurity.hash_password(password)
             user = User(email=email, username=username, password=hashed_password)
 
             db.session.add(user)
@@ -238,7 +238,7 @@ def register_routes(app, db, login_manager):
                 (User.email == username) | (User.username == username)
             ).first()
 
-            if user and check_password_hash(user.password, password):
+            if user and PasswordSecurity.verify_password(password, user.password):
                 # Сброс счётчика при успехе
                 session.pop(fail_key, None)
                 session.pop(fail_time_key, None)
@@ -675,7 +675,7 @@ def register_routes(app, db, login_manager):
         if not current_password or not new_password or not confirm_password:
             return jsonify({'error': 'Заполните все поля'}), 400
 
-        if not check_password_hash(current_user.password, current_password):
+        if not PasswordSecurity.verify_password(current_password, current_user.password):
             return jsonify({'error': 'Неверный текущий пароль'}), 400
 
         if new_password != confirm_password:
@@ -687,7 +687,7 @@ def register_routes(app, db, login_manager):
         if new_password == current_password:
             return jsonify({'error': 'Новый пароль совпадает со старым'}), 400
 
-        current_user.password = generate_password_hash(new_password)
+        current_user.password = PasswordSecurity.hash_password(new_password)
         db.session.commit()
 
         try:
@@ -2254,7 +2254,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
             if not user:
                 return render_template('forgot_password.html', error='Пользователь не найден')
 
-            user.password      = generate_password_hash(new_password)
+            user.password      = PasswordSecurity.hash_password(new_password)
             reset_request.used = True
             db.session.commit()
 
