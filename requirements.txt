@@ -19,3 +19,5 @@ user-agents
 flask-compress
 flask-socketio
 simple-websocket
+gevent 
+gevent-websocket

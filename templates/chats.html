@@ -1324,6 +1324,30 @@
             fetchChatsList();
         });
 
+        // Чат удалён другим участником — убираем из списка мгновенно
+        socket.on('chat_deleted', (data) => {
+            const el = document.querySelector(`.chat-item-wrapper[data-chat-id="${data.chat_id}"][data-type="private"]`);
+            if (el) {
+                el.style.transition = 'opacity 0.3s, transform 0.3s';
+                el.style.opacity = '0';
+                el.style.transform = 'translateX(-20px)';
+                setTimeout(() => {
+                    el.remove();
+                    const list = document.getElementById('chatsList');
+                    if (list && list.querySelectorAll('.chat-item-wrapper').length === 0) {
+                        list.innerHTML = `
+                            <div class="empty-chats">
+                                <span class="empty-icon">
+                                    <svg width="64" height="64" viewBox="0 0 1024 1024"><use xlink:href="#icon-chat"></use></svg>
+                                </span>
+                                <h3>Нет чатов</h3>
+                                <p>Нажмите карандаш, чтобы начать общение</p>
+                            </div>`;
+                    }
+                }, 300);
+            }
+        });
+
         // При переподключении тоже обновляем
         socket.on('reconnect', () => {
             fetchChatsList();

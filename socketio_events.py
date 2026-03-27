@@ -22,9 +22,9 @@ from utils import format_file_size, get_file_category, get_file_icon
 
 socketio = SocketIO(
     cors_allowed_origins="*",
-    async_mode="threading",   # совместимо со стандартным Flask
-    ping_timeout=30,
-    ping_interval=15,
+    async_mode="gevent",      # gevent правильно обрабатывает WS-апгрейд
+    ping_timeout=60,
+    ping_interval=25,
     logger=False,
     engineio_logger=False,
 )
@@ -500,6 +500,13 @@ def broadcast_message_edited(message_id: int, new_content: str, chat_id: int = N
         socketio.emit("message_edited", payload, to=f"chat_{chat_id}")
     elif group_id:
         socketio.emit("message_edited", payload, to=f"group_{group_id}")
+
+
+def broadcast_chat_deleted(chat_id: int, user1_id: int, user2_id: int):
+    """Оповещает обоих участников чата об удалении через их личные комнаты."""
+    payload = {"chat_id": chat_id}
+    socketio.emit("chat_deleted", payload, to=f"user_{user1_id}")
+    socketio.emit("chat_deleted", payload, to=f"user_{user2_id}")
 
 
 # ──────────────────────────────────────────────

@@ -1,3 +1,12 @@
+# gevent monkey-patch — ОБЯЗАТЕЛЬНО первой строкой, до всех других импортов!
+# Без этого WebSocket-апгрейд падает с AssertionError в Werkzeug.
+# Установка: pip install gevent gevent-websocket
+try:
+    from gevent import monkey
+    monkey.patch_all()
+except ImportError:
+    pass  # gevent не установлен — WS не будет работать, см. README
+
 from flask import Flask, session, redirect, url_for
 from flask_login import LoginManager, logout_user, current_user
 from config import Config
@@ -60,6 +69,23 @@ def create_app():
 
     # Инициализируем модуль безопасности (после регистрации маршрутов!)
     init_security(app)
+
+    # ============================================================
+    # КАСТОМНЫЕ СТРАНИЦЫ ОШИБОК
+    # ============================================================
+
+    @app.errorhandler(404)
+    def page_not_found(e):
+        from flask import render_template
+        return render_template('404.html'), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        from flask import render_template
+        db.session.rollback()
+        return render_template('404.html', error_code=500,
+                               error_title="Ошибка сервера",
+                               error_message="Что-то пошло не так. Попробуйте позже."), 500
 
     # ============================================================
     # ПРОВЕРКА ВАЛИДНОСТИ СЕССИИ ПРИ КАЖДОМ ЗАПРОСЕ
@@ -125,4 +151,5 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    socketio.run(app, debug=True, host='0.0.0.0', port=2200, allow_unsafe_werkzeug=True)
+    # gevent-сервер сам обрабатывает WS — allow_unsafe_werkzeug не нужен
+    socketio.run(app, debug=True, host='0.0.0.0', port=2200)

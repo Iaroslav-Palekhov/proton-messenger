@@ -473,6 +473,10 @@ def register_routes(app, db, login_manager):
             return jsonify({'error': 'Нет доступа'}), 403
 
         try:
+            # Запоминаем участников ДО удаления
+            u1_id = chat.user1_id
+            u2_id = chat.user2_id
+
             messages = Message.query.filter_by(chat_id=chat_id).all()
             for message in messages:
                 ForwardedMessage.query.filter(
@@ -483,6 +487,11 @@ def register_routes(app, db, login_manager):
             Message.query.filter_by(chat_id=chat_id).delete()
             db.session.delete(chat)
             db.session.commit()
+
+            # Оповещаем обоих участников через WebSocket
+            from socketio_events import broadcast_chat_deleted
+            broadcast_chat_deleted(chat_id, u1_id, u2_id)
+
             return jsonify({'success': True})
         except Exception as e:
             db.session.rollback()
@@ -2169,12 +2178,29 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
                 except Exception:
                     pass
 
-        zip_buffer.seek(0)
-        zip_name = f'export_{safe_title}.zip'
+        zip_name = f'export_{safe_title}_user{current_user.id}.zip'
+
+        # Папка для хранения экспортов
+        exports_dir = os.path.join(app.static_folder, 'exports')
+        os.makedirs(exports_dir, exist_ok=True)
+
+        # Удаляем старые экспорты этого пользователя для этого чата
+        prefix = f'export_{safe_title}_user{current_user.id}'
+        for old_file in os.listdir(exports_dir):
+            if old_file.startswith(prefix):
+                try:
+                    os.remove(os.path.join(exports_dir, old_file))
+                except Exception:
+                    pass
+
+        # Сохраняем новый ZIP на диск
+        zip_path = os.path.join(exports_dir, zip_name)
+        with open(zip_path, 'wb') as f:
+            f.write(zip_buffer.getvalue())
 
         from flask import send_file
         return send_file(
-            zip_buffer,
+            zip_path,
             as_attachment=True,
             download_name=zip_name,
             mimetype='application/zip'
