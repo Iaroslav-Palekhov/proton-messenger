@@ -37,4 +37,4 @@ echo "Для остановки нажмите Ctrl+C"
 echo
 
 # Запуск приложения
-python3 app.py
+python3 proton.py
