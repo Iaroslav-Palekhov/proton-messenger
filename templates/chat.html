@@ -404,6 +404,28 @@ code.inline-code {
     opacity: 0.8;
     transform: scale(1.1);
 }
+.drag-over-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: var(--accent-alpha, rgba(var(--accent-rgb, 99,102,241), 0.12));
+    border: 2.5px dashed var(--accent);
+    border-radius: var(--radius-md);
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    gap: 10px;
+    pointer-events: none;
+}
+.drag-over-overlay.active {
+    display: flex;
+}
+.message-input {
+    position: relative;
+}
 .modal {
     display: none;
     position: fixed;
@@ -1516,6 +1538,19 @@ function handleFileSelect() {
     const filePreview = document.getElementById('filePreview');
     if (!fileInput.files.length) return;
     const file = fileInput.files[0];
+    attachFile(file);
+}
+
+// Прикрепление файла (общий метод для paste / drag-drop / кнопки)
+function attachFile(file) {
+    const filePreview = document.getElementById('filePreview');
+    const fileInput = document.getElementById('fileInput');
+    // Подменяем файл в input через DataTransfer
+    try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        fileInput.files = dt.files;
+    } catch(e) {}
     const ext = file.name.split('.').pop().toLowerCase();
     const isImage = ['jpg','jpeg','png','gif','webp','bmp'].includes(ext);
     const iconId = getFileIcon(ext);
@@ -1543,6 +1578,53 @@ function handleFileSelect() {
     }
     filePreview.style.display = 'flex';
 }
+
+// Обработка Ctrl+V с файлом в буфере
+function handlePasteFile(event) {
+    const items = event.clipboardData && event.clipboardData.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') {
+            const file = items[i].getAsFile();
+            if (file) {
+                event.preventDefault();
+                attachFile(file);
+                return;
+            }
+        }
+    }
+}
+
+// Drag & Drop инициализация
+function initDragDrop() {
+    const footer = document.querySelector('.message-input');
+    const overlay = document.getElementById('dragOverlay');
+    if (!footer || !overlay) return;
+    let dragCounter = 0;
+    footer.addEventListener('dragenter', e => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        dragCounter++;
+        overlay.classList.add('active');
+    });
+    footer.addEventListener('dragleave', e => {
+        dragCounter--;
+        if (dragCounter <= 0) { dragCounter = 0; overlay.classList.remove('active'); }
+    });
+    footer.addEventListener('dragover', e => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    });
+    footer.addEventListener('drop', e => {
+        e.preventDefault();
+        dragCounter = 0;
+        overlay.classList.remove('active');
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) attachFile(files[0]);
+    });
+}
+document.addEventListener('DOMContentLoaded', initDragDrop);
 
 // Очистка файла
 function clearFile() {
@@ -2938,7 +3020,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     style="flex:1; padding:10px 12px; background:transparent; border:none; color:var(--text-primary); font-size:15px; resize:none; overflow-y:auto; max-height:150px; line-height:1.5; font-family:inherit; outline:none;"
                     onkeydown="if(event.keyCode===13&&!event.shiftKey){event.preventDefault();sendMessage();} autoResizeTextarea(this);"
                     oninput="autoResizeTextarea(this);"
-                    onpaste="setTimeout(()=>autoResizeTextarea(this),0);"></textarea>
+                    onpaste="handlePasteFile(event); setTimeout(()=>autoResizeTextarea(this),0);"></textarea>
                 <button type="button" class="send-btn" id="sendBtn" onclick="sendMessage()" title="Отправить">
                     <svg width="24" height="24" viewBox="0 0 1024 1024">
                         <use xlink:href="#icon-send"></use>
@@ -2961,6 +3043,11 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
 
         </form>
+        <!-- Drag & Drop overlay -->
+        <div class="drag-over-overlay" id="dragOverlay">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Отпустите файл для прикрепления
+        </div>
     </footer>
     {% endif %}
 </div>

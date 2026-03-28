@@ -64,8 +64,19 @@ def allowed_file(filename):
     return True
 
 def get_file_category(filename):
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    """Определяет категорию файла по расширению"""
+    # Получаем расширение файла
+    if '.' in filename:
+        ext = filename.rsplit('.', 1)[1].lower()
+    else:
+        ext = ''
 
+    # Проверяем на специальные случаи
+    # .docx, .xlsx, .pptx и другие офисные форматы
+    if ext in ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'odt', 'ods', 'odp', 'rtf', 'pdf']:
+        return 'document'
+    
+    # Другие расширения
     image_ext = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'heic', 'raw'}
     video_ext = {'mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'mpg', 'mpeg'}
     audio_ext = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus'}
@@ -89,18 +100,28 @@ def get_file_category(filename):
         return 'other'
 
 def get_file_icon(filename):
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    """Возвращает иконку для файла по расширению"""
+    if '.' in filename:
+        ext = filename.rsplit('.', 1)[1].lower()
+    else:
+        ext = ''
 
     icons = {
+        # Изображения
         'jpg': '[img]', 'jpeg': '[img]', 'png': '[img]', 'gif': '[img]', 'webp': '[img]', 'svg': '[img]', 'bmp': '[img]',
+        # Видео
         'mp4': '[video]', 'avi': '[video]', 'mov': '[video]', 'mkv': '[video]', 'webm': '[video]',
+        # Аудио
         'mp3': '[audio]', 'wav': '[audio]', 'ogg': '[audio]', 'flac': '[audio]', 'm4a': '[audio]',
+        # Документы
         'pdf': '[pdf]', 'doc': '[doc]', 'docx': '[doc]', 'txt': '[txt]', 'rtf': '[txt]',
         'xls': '[xls]', 'xlsx': '[xls]', 'csv': '[csv]', 'ppt': '[ppt]', 'pptx': '[ppt]',
+        # Архивы
         'zip': '[zip]', 'rar': '[zip]', '7z': '[zip]', 'tar': '[zip]', 'gz': '[zip]',
+        # Исполняемые
         'exe': '[exe]', 'msi': '[exe]', 'sh': '[sh]', 'bat': '[bat]', 'apk': '[apk]',
-        'default': '[file]'
     }
+    #return icons.get(ext, '[file]')
     return icons.get(ext, icons['default'])
 
 def format_file_size(size_bytes):
