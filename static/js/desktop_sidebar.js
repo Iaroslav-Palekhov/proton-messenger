@@ -140,35 +140,65 @@ function dsFilterChats(q) {
 
     clearTimeout(_dsSearchTimeout);
     _dsSearchTimeout = setTimeout(() => {
-        fetch(`/api/search_users?q=${encodeURIComponent(q)}`)
-            .then(r => r.json())
-            .then(data => {
-                if (!data.users || data.users.length === 0) return;
-                const section = document.createElement('div');
-                section.id = 'dsUserSearchSection';
-                section.innerHTML = `
-                    <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:12px 14px 6px;">Пользователи</div>
-                    ${data.users.map(u => `
-                        <div class="ds-chat-item" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .15s;border-radius:10px;text-decoration:none;"
-                             onmouseenter="this.style.background='var(--bg-hover)'"
-                             onmouseleave="this.style.background=''">
-                            <img src="${u.avatar}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;"
-                                 onerror="this.src='/static/uploads/avatars/default.png'">
-                            <div style="flex:1;min-width:0;">
-                                <div style="font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${u.username}</div>
-                                <div style="font-size:12px;color:var(--text-muted);">${u.status === 'online' ? 'Онлайн' : 'Не в сети'}</div>
-                            </div>
-                            <button onclick="dsChatFromSearch('${u.username}')" title="Написать"
-                                    style="background:rgba(0,168,132,.12);color:var(--accent);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">
-                                Написать
-                            </button>
+        Promise.all([
+            fetch(`/api/search_users?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ users: [] })),
+            fetch(`/groups/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ groups: [] }))
+        ]).then(([userData, groupData]) => {
+            const users  = userData.users  || [];
+            const groups = groupData.groups || [];
+
+            if (users.length === 0 && groups.length === 0) return;
+
+            const section = document.createElement('div');
+            section.id = 'dsUserSearchSection';
+
+            const usersHtml = users.length > 0 ? `
+                <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:12px 14px 6px;">Пользователи</div>
+                ${users.map(u => `
+                    <div class="ds-chat-item" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .15s;border-radius:10px;"
+                         onmouseenter="this.style.background='var(--bg-hover)'"
+                         onmouseleave="this.style.background=''">
+                        <img src="${u.avatar}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;"
+                             onerror="this.src='/static/uploads/avatars/default.png'">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dsEscape(u.username)}</div>
+                            <div style="font-size:12px;color:var(--text-muted);">${u.status === 'online' ? 'Онлайн' : 'Не в сети'}</div>
                         </div>
-                    `).join('')}
-                `;
-                const chatsList = document.getElementById('dsChatsList');
-                if (chatsList) chatsList.prepend(section);
-            })
-            .catch(() => {});
+                        <button onclick="dsChatFromSearch('${dsEscape(u.username)}')" title="Написать"
+                                style="background:rgba(0,168,132,.12);color:var(--accent);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">
+                            Написать
+                        </button>
+                    </div>
+                `).join('')}
+            ` : '';
+
+            const groupsHtml = groups.length > 0 ? `
+                <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:12px 14px 6px;">Публичные группы</div>
+                ${groups.map(g => `
+                    <div class="ds-chat-item" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .15s;border-radius:10px;"
+                         onmouseenter="this.style.background='var(--bg-hover)'"
+                         onmouseleave="this.style.background=''"
+                         onclick="window.location.href='/group/${g.id}'">
+                        <img src="${g.icon}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;"
+                             onerror="this.src='/static/uploads/group_icons/default.png'">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dsEscape(g.name)}</div>
+                            <div style="font-size:12px;color:var(--text-muted);">
+                                ${g.members_count} участников · ${g.join_type === 'request' ? '📋 По заявке' : '✅ Открытая'}
+                            </div>
+                        </div>
+                        <button onclick="event.stopPropagation();window.location.href='/group/${g.id}'" title="${g.is_member ? 'Открыть' : 'Вступить'}"
+                                style="background:rgba(0,168,132,.12);color:var(--accent);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">
+                            ${g.is_member ? 'Открыть' : 'Вступить'}
+                        </button>
+                    </div>
+                `).join('')}
+            ` : '';
+
+            section.innerHTML = usersHtml + groupsHtml;
+            const chatsList = document.getElementById('dsChatsList');
+            if (chatsList) chatsList.prepend(section);
+        });
     }, 250);
 }
 

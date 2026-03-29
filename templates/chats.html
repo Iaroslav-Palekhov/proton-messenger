@@ -1007,6 +1007,53 @@
                 <textarea name="description" placeholder="Опишите тему группы..."></textarea>
             </div>
             <div class="form-group">
+                <label>Юзернейм группы <span style="color:var(--text-secondary);font-weight:400;">(необязательно)</span></label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:var(--text-secondary);font-size:15px;">@</span>
+                    <input type="text" name="group_username" placeholder="my_group"
+                           pattern="[A-Za-z0-9_]+" maxlength="50" style="flex:1;">
+                </div>
+                <small style="color:var(--text-secondary);">Буквы, цифры, _. По нему можно вступить: /g/username</small>
+            </div>
+            <div class="form-group">
+                <label>Видимость</label>
+                <div style="display:flex;gap:8px;">
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid transparent;" id="cg-vis-private-lbl">
+                        <input type="radio" name="visibility" value="private" checked onchange="cgUpdateVisUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">🔒 Приватная</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Только по ссылке</div>
+                        </div>
+                    </label>
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid transparent;" id="cg-vis-public-lbl">
+                        <input type="radio" name="visibility" value="public" onchange="cgUpdateVisUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">🌐 Публичная</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Видна в поиске</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Тип вступления</label>
+                <div style="display:flex;gap:8px;">
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid transparent;" id="cg-jt-open-lbl">
+                        <input type="radio" name="join_type" value="open" checked onchange="cgUpdateJtUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">✅ Открытая</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Вступить сразу</div>
+                        </div>
+                    </label>
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid transparent;" id="cg-jt-request-lbl">
+                        <input type="radio" name="join_type" value="request" onchange="cgUpdateJtUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">📋 По заявке</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Админ одобряет</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
                 <label>Иконка группы</label>
                 <input type="file" name="icon" accept="image/*">
             </div>
@@ -1142,10 +1189,28 @@
 
     function showCreateGroupModal() {
         document.getElementById('createGroupModal').classList.add('active');
+        // Подсветить дефолтные radio при открытии
+        cgUpdateVisUI();
+        cgUpdateJtUI();
     }
 
     function hideCreateGroupModal() {
         document.getElementById('createGroupModal').classList.remove('active');
+    }
+
+    function cgUpdateVisUI() {
+        const pub = document.querySelector('input[name="visibility"][value="public"]')?.checked;
+        const pubLbl  = document.getElementById('cg-vis-public-lbl');
+        const privLbl = document.getElementById('cg-vis-private-lbl');
+        if (pubLbl)  pubLbl.style.borderColor  = pub  ? 'var(--accent)' : 'transparent';
+        if (privLbl) privLbl.style.borderColor = !pub ? 'var(--accent)' : 'transparent';
+    }
+    function cgUpdateJtUI() {
+        const open = document.querySelector('input[name="join_type"][value="open"]')?.checked;
+        const openLbl = document.getElementById('cg-jt-open-lbl');
+        const reqLbl  = document.getElementById('cg-jt-request-lbl');
+        if (openLbl) openLbl.style.borderColor = open  ? 'var(--accent)' : 'transparent';
+        if (reqLbl)  reqLbl.style.borderColor  = !open ? 'var(--accent)' : 'transparent';
     }
 
     // Закрытие по клику на оверлей
@@ -1234,52 +1299,83 @@
             if (matches) localMatch = true;
         });
 
-        // Ищем пользователей через API
+        // Ищем пользователей И публичные группы через API параллельно
         _searchTimeout = setTimeout(() => {
-            fetch(`/api/search_users?q=${encodeURIComponent(q)}`)
-                .then(r => r.json())
-                .then(data => {
-                    let section = document.getElementById('searchResultsSection');
-                    if (!section) {
-                        section = document.createElement('div');
-                        section.id = 'searchResultsSection';
-                        section.style.cssText = 'padding: 8px 15px 0;';
-                        document.getElementById('chatsList').prepend(section);
-                    }
-                    if (!data.users || data.users.length === 0) {
-                        section.innerHTML = '';
-                        return;
-                    }
-                    section.innerHTML = `
-                        <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:4px 0 8px;">Пользователи</div>
-                        ${data.users.map(u => `
-                            <div class="chat-item-wrapper" style="margin-bottom:8px;">
-                                <a href="${u.profile_url}" class="chat-item" style="text-decoration:none;color:inherit;">
-                                    <div class="chat-avatar">
-                                        <img src="${u.avatar}" alt="" onerror="this.src='/static/uploads/avatars/default.png'">
-                                        <span class="status ${u.status}"></span>
+            Promise.all([
+                fetch(`/api/search_users?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ users: [] })),
+                fetch(`/groups/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ groups: [] }))
+            ]).then(([userData, groupData]) => {
+                let section = document.getElementById('searchResultsSection');
+                if (!section) {
+                    section = document.createElement('div');
+                    section.id = 'searchResultsSection';
+                    section.style.cssText = 'padding: 8px 15px 0;';
+                    document.getElementById('chatsList').prepend(section);
+                }
+
+                const users  = userData.users  || [];
+                const groups = groupData.groups || [];
+
+                if (users.length === 0 && groups.length === 0) {
+                    section.innerHTML = '';
+                    return;
+                }
+
+                const usersHtml = users.length > 0 ? `
+                    <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:4px 0 8px;">Пользователи</div>
+                    ${users.map(u => `
+                        <div class="chat-item-wrapper" style="margin-bottom:8px;">
+                            <a href="${u.profile_url}" class="chat-item" style="text-decoration:none;color:inherit;">
+                                <div class="chat-avatar">
+                                    <img src="${u.avatar}" alt="" onerror="this.src='/static/uploads/avatars/default.png'">
+                                    <span class="status ${u.status}"></span>
+                                </div>
+                                <div class="chat-info">
+                                    <div class="chat-header">
+                                        <h3>${u.username}</h3>
+                                        <span class="chat-time">${u.status === 'online' ? 'Онлайн' : ''}</span>
                                     </div>
-                                    <div class="chat-info">
-                                        <div class="chat-header">
-                                            <h3>${u.username}</h3>
-                                            <span class="chat-time">${u.status === 'online' ? 'Онлайн' : ''}</span>
-                                        </div>
-                                        <div class="chat-preview">
-                                            <p style="color:var(--text-muted);">Нажмите чтобы открыть профиль</p>
-                                        </div>
+                                    <div class="chat-preview">
+                                        <p style="color:var(--text-muted);">Нажмите чтобы открыть профиль</p>
                                     </div>
-                                </a>
-                                <button class="delete-chat-btn" style="color:var(--accent);"
-                                        onclick="event.preventDefault();event.stopPropagation();startChatFromSearch('${u.username}')"
-                                        title="Написать">
-                                    <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-chat"></use></svg>
-                                </button>
+                                </div>
+                            </a>
+                            <button class="delete-chat-btn" style="color:var(--accent);"
+                                    onclick="event.preventDefault();event.stopPropagation();startChatFromSearch('${u.username}')"
+                                    title="Написать">
+                                <svg width="20" height="20" viewBox="0 0 1024 1024"><use xlink:href="#icon-chat"></use></svg>
+                            </button>
+                        </div>
+                    `).join('')}
+                    <div style="height:4px;"></div>
+                ` : '';
+
+                const groupsHtml = groups.length > 0 ? `
+                    <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;padding:4px 0 8px;">Публичные группы</div>
+                    ${groups.map(g => `
+                        <div style="display:flex;align-items:center;gap:10px;padding:8px 4px;cursor:pointer;border-radius:12px;transition:background .15s;"
+                             onclick="window.location.href='/group/${g.id}'"
+                             onmouseenter="this.style.background='var(--bg-hover)'"
+                             onmouseleave="this.style.background=''">
+                            <img src="${g.icon}" alt=""
+                                 onerror="this.src='/static/uploads/group_icons/default.png'"
+                                 style="width:40px;height:40px;border-radius:50%;object-fit:cover;flex-shrink:0;">
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${g.name}</div>
+                                <div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                                    ${g.members_count} уч. · ${g.join_type === 'request' ? '📋 По заявке' : '✅ Открытая'}
+                                </div>
                             </div>
-                        `).join('')}
-                        <div style="height:8px;"></div>
-                    `;
-                })
-                .catch(() => {});
+                            <span style="font-size:12px;font-weight:600;color:${g.is_member ? 'var(--text-secondary)' : 'var(--accent)'};flex-shrink:0;">
+                                ${g.is_member ? 'Открыть' : 'Вступить'}
+                            </span>
+                        </div>
+                    `).join('')}
+                    <div style="height:8px;"></div>
+                ` : '';
+
+                section.innerHTML = usersHtml + groupsHtml;
+            });
         }, 250);
     });
 

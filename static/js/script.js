@@ -215,13 +215,18 @@ document.head.appendChild(style);
 // Функция для обработки ошибок загрузки изображений
 function handleImageError(img) {
     img.onerror = null;
-    img.src = '/static/images/default-error.png';
-    img.alt = 'Не удалось загрузить изображение';
+    // Выбираем fallback в зависимости от контекста
+    if (img.src.includes('group_icon') || img.src.includes('group_icons')) {
+        img.src = '/static/uploads/group_icons/default.png';
+    } else {
+        img.src = '/static/uploads/avatars/default.png';
+    }
+    img.alt = 'Изображение недоступно';
 }
 
-// Добавляем обработчики ко всем изображениям
+// Добавляем обработчики только к тем img, у которых нет своего onerror
 document.addEventListener('DOMContentLoaded', function() {
-    const images = document.querySelectorAll('img');
+    const images = document.querySelectorAll('img:not([onerror])');
     images.forEach(img => {
         img.addEventListener('error', function() {
             handleImageError(this);

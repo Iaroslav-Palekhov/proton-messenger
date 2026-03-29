@@ -997,24 +997,11 @@ function loadOlderMessages() {
         });
 }
 
-// Обновление сообщений — только через WebSocket
+// Обновление сообщений — только через WebSocket (request_missed_messages)
 function updateMessages() {
-    // Загружает пропущенные сообщения при переподключении WS
-    fetch(`/get_messages/{{ chat.id }}?last_id=${lastMessageId}`)
-        .then(response => response.json())
-        .then(messages => {
-            if (messages.length > 0) {
-                const container = document.getElementById('messagesContainer');
-                const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-                messages.forEach(message => {
-                    addMessageToChat(message);
-                    if (message.id > lastMessageId) lastMessageId = message.id;
-                });
-                if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
-                else container.scrollTop = container.scrollHeight - scrollPosition;
-            }
-        })
-        .catch(err => console.error('[Chat] Ошибка загрузки пропущенных:', err));
+    if (window._socket) {
+        window._socket.emit('request_missed_messages', { chat_id: CHAT_ID, last_id: lastMessageId });
+    }
 }
 
 // Построение HTML одного сообщения (переиспользуется при подгрузке истории)
@@ -1352,28 +1339,10 @@ function injectLinkPreview(contentDiv, data) {
 
 // Polling для link preview: используем существующий эндпоинт get_messages
 // Запрашиваем сообщение начиная с messageId-1 чтобы получить его с обновлёнными данными о ссылке
+// Превью ссылки приходит через WebSocket событие link_preview_ready — polling не нужен
 function pollForLinkPreview(messageId, messageEl, attempts) {
-    attempts = attempts || 0;
-    if (attempts >= 8) return; // ~16 секунд максимум
-    setTimeout(() => {
-        fetch(`/get_messages/{{ chat.id }}?last_id=${messageId - 1}`)
-            .then(r => r.json())
-            .then(messages => {
-                const msg = messages.find(m => m.id == messageId);
-                if (msg && msg.link_url) {
-                    const el = document.querySelector(`.message[data-message-id="${messageId}"]`) || messageEl;
-                    if (el) {
-                        const contentDiv = el.querySelector('.message-content');
-                        if (contentDiv && !contentDiv.querySelector('.link-preview')) {
-                            injectLinkPreview(contentDiv, msg);
-                        }
-                    }
-                } else {
-                    pollForLinkPreview(messageId, messageEl, attempts + 1);
-                }
-            })
-            .catch(() => {});
-    }, 2000);
+    // Устарело: превью ссылок теперь доставляется через WebSocket (link_preview_ready)
+    // Оставлено для совместимости, но реального polling нет
 }
 
 // Восстановление при ошибке
@@ -1406,16 +1375,10 @@ function restoreFailedMessage(tempMessageId, messageText, error) {
 // Удаление сообщения
 function deleteMessage(messageId) {
     if (!confirm('Удалить это сообщение?')) return;
-    fetch(`/delete_message/${messageId}`, { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) msg.remove();
-            } else {
-                alert(data.error || 'Ошибка при удалении');
-            }
-        });
+    // Удаляем через WebSocket
+    if (window._socket) {
+        window._socket.emit('delete_message', { message_id: messageId });
+    }
 }
 
 // Редактирование по ID (для контекстного меню)
@@ -1481,30 +1444,11 @@ function submitEdit(messageId, btn) {
     const newText = modal.querySelector('#editMessageText').value.trim();
     if (!newText) return alert('Текст не может быть пустым');
 
-    const formData = new FormData();
-    formData.append('content', newText);
-
-    fetch(`/edit_message/${messageId}`, { method: 'POST', body: formData })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) {
-                    const p = msg.querySelector('.message-content p');
-                    if (p) p.textContent = data.content;
-                    const meta = msg.querySelector('.message-meta');
-                    if (meta && !meta.querySelector('.edited-label')) {
-                        const span = document.createElement('span');
-                        span.className = 'edited-label';
-                        span.textContent = 'отредактировано';
-                        meta.insertBefore(span, meta.firstChild);
-                    }
-                }
-                modal.remove();
-            } else {
-                alert(data.error || 'Ошибка при редактировании');
-            }
-        });
+    // Редактирование через WebSocket
+    if (window._socket) {
+        window._socket.emit('edit_message', { message_id: messageId, content: newText });
+    }
+    modal.remove();
 }
 
 // Повторная отправка
@@ -1645,47 +1589,17 @@ function downloadFile(filePath, fileName) {
 
 // ========== ЗАКРЕПЛЕНИЕ СООБЩЕНИЙ ==========
 function pinMessage(messageId) {
-    fetch(`/pin_message/${messageId}`, { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                showNotification('Сообщение закреплено', 'success');
-                refreshPinnedBanner();
-                // Обновляем кнопку в DOM — заменяем «Закрепить» на «Открепить»
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) {
-                    const pinBtn = msg.querySelector(`button[onclick="pinMessage(${messageId})"]`);
-                    if (pinBtn) {
-                        pinBtn.title = 'Открепить';
-                        pinBtn.style.opacity = '0.6';
-                        pinBtn.setAttribute('onclick', `unpinMessage(${messageId})`);
-                    }
-                }
-            } else { alert(data.error || 'Ошибка'); }
-        });
+    if (window._socket) {
+        window._socket.emit('pin_message', { message_id: messageId });
+    }
 }
 function unpinMessage(messageId) {
     if (!confirm('Открепить это сообщение?')) return;
-    fetch(`/unpin_message/${messageId}`, { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                showNotification('Сообщение откреплено', 'info');
-                refreshPinnedBanner();
-                // Обновляем кнопку в DOM — заменяем «Открепить» на «Закрепить»
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) {
-                    const unpinBtn = msg.querySelector(`button[onclick="unpinMessage(${messageId})"]`);
-                    if (unpinBtn) {
-                        unpinBtn.title = 'Закрепить';
-                        unpinBtn.style.opacity = '1';
-                        unpinBtn.setAttribute('onclick', `pinMessage(${messageId})`);
-                    }
-                }
-            }
-            else { alert(data.error || 'Ошибка'); }
-        });
+    if (window._socket) {
+        window._socket.emit('unpin_message', { message_id: messageId });
+    }
 }
+
 function refreshPinnedBanner() {
     fetch(`/get_pinned_messages/{{ chat.id }}`)
         .then(r => r.json())
@@ -2356,6 +2270,46 @@ function initWebSocket() {
             el.title = 'Прочитано';
             el.innerHTML = `<svg width="16" height="16" viewBox="0 0 1024 1024"><use xlink:href="#icon-eye"></use></svg>`;
         });
+    });
+
+    // Пропущенные сообщения (ответ на request_missed_messages при reconnect)
+    socket.on('missed_messages', (data) => {
+        if (!data.messages || !data.messages.length) return;
+        const container = document.getElementById('messagesContainer');
+        const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+        data.messages.forEach(message => {
+            addMessageToChat(message);
+            if (message.id > lastMessageId) lastMessageId = message.id;
+        });
+        if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
+    });
+
+    // Закрепление / открепление через WebSocket
+    socket.on('pin_updated', (data) => {
+        if (data.action === 'pinned') {
+            showNotification('Сообщение закреплено', 'success');
+            const msg = document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+            if (msg) {
+                const pinBtn = msg.querySelector(`button[onclick="pinMessage(${data.message_id})"]`);
+                if (pinBtn) {
+                    pinBtn.title = 'Открепить';
+                    pinBtn.style.opacity = '0.6';
+                    pinBtn.setAttribute('onclick', `unpinMessage(${data.message_id})`);
+                }
+            }
+        } else {
+            showNotification('Сообщение откреплено', 'info');
+            const msg = document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+            if (msg) {
+                const unpinBtn = msg.querySelector(`button[onclick="unpinMessage(${data.message_id})"]`);
+                if (unpinBtn) {
+                    unpinBtn.title = 'Закрепить';
+                    unpinBtn.style.opacity = '1';
+                    unpinBtn.setAttribute('onclick', `pinMessage(${data.message_id})`);
+                }
+            }
+        }
+        refreshPinnedBanner();
     });
 
     // Heartbeat каждые 20 сек

@@ -3,8 +3,34 @@
 {% block title %}Участники {{ group.name }} - Мессенджер{% endblock %}
 
 {% block content %}
+<style>
+/* Переопределяем мобильный layout для страницы участников */
+.app-container {
+    height: 100dvh;
+    overflow: hidden;
+}
+.sidebar {
+    width: 100% !important;
+    max-height: none !important;
+    height: 100dvh !important;
+    overflow-y: auto !important;
+    flex: 1 !important;
+}
+@media (max-width: 768px) {
+    .app-container {
+        flex-direction: column;
+        height: 100dvh;
+    }
+    .sidebar {
+        width: 100% !important;
+        max-height: none !important;
+        height: 100dvh !important;
+        overflow-y: auto !important;
+    }
+}
+</style>
 <div class="app-container">
-    <div class="sidebar" style="width: 100%; max-width: 600px; margin: 0 auto; border-right: none; overflow-y: auto;">
+    <div class="sidebar" style="width: 100%; max-width: 600px; margin: 0 auto; border-right: none;">
         <div class="header" style="position: sticky; top: 0; z-index: 10; background: var(--bg-secondary);">
             <div class="user-info">
                 <a href="{{ url_for('group_chat', group_id=group.id) }}" class="btn-icon" style="background: var(--bg-tertiary); margin-right: 10px;">
@@ -37,6 +63,45 @@
         </div>
 
         <div style="padding: 20px;">
+
+            {# ── Invite-ссылка (только для участников) ── #}
+            {% if current_membership.role in ['owner', 'admin'] %}
+            <div style="background: var(--bg-tertiary, var(--bg-primary)); border-radius: 14px; padding: 16px; margin-bottom: 20px;">
+                <div style="font-size:13px; color:var(--text-secondary); margin-bottom:8px; font-weight:600; text-transform:uppercase; letter-spacing:.5px;">Ссылка-приглашение</div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input id="inviteLinkInput" type="text" readonly
+                           style="flex:1; background:var(--bg-secondary); border:1.5px solid var(--border); border-radius:9px; padding:9px 12px; font-size:13px; color:var(--text-primary); outline:none; cursor:pointer;"
+                           onclick="this.select()" placeholder="Загрузка...">
+                    <button class="btn-icon" onclick="copyInviteLink()" title="Скопировать">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                    <button class="btn-icon" onclick="resetInviteLink()" title="Сбросить ссылку" style="color:var(--danger);">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+                    </button>
+                </div>
+                {% if group.group_username %}
+                <div style="font-size:12px; color:var(--text-secondary); margin-top:8px;">
+                    Также по юзернейму: <span style="color:var(--accent);">@{{ group.group_username }}</span>
+                    &nbsp;·&nbsp; <a href="/g/{{ group.group_username }}" style="color:var(--accent);">/g/{{ group.group_username }}</a>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {# ── Заявки на вступление (только admin/owner, только для join_type=request) ── #}
+            {% if current_membership.role in ['owner', 'admin'] and group.join_type == 'request' %}
+            <div id="joinRequestsSection" style="margin-bottom: 24px;">
+                <h3 style="color: var(--text-primary); margin-bottom: 14px; display:flex; align-items:center; gap:8px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Заявки на вступление
+                    <span id="requestsBadge" style="display:none; background:var(--danger); color:#fff; border-radius:20px; padding:1px 8px; font-size:12px;"></span>
+                </h3>
+                <div id="requestsList">
+                    <p style="color:var(--text-secondary); font-size:14px;">Загрузка...</p>
+                </div>
+            </div>
+            {% endif %}
+
             <div style="margin-bottom: 20px;">
                 <h3 style="color: var(--text-primary); margin-bottom: 15px;">
                     <svg width="20" height="20" viewBox="0 0 24 24" style="vertical-align: middle; margin-right: 8px;">
@@ -178,6 +243,101 @@
 </div>
 
 <script>
+    // ── Invite link ──────────────────────────────────────────────────────────
+    const GROUP_ID = {{ group.id }};
+
+    async function loadInviteLink() {
+        try {
+            const r = await fetch(`/group/${GROUP_ID}/invite_link`);
+            const d = await r.json();
+            if (d.invite_link) {
+                document.getElementById('inviteLinkInput').value = d.invite_link;
+            }
+        } catch(e) {}
+    }
+
+    async function copyInviteLink() {
+        const inp = document.getElementById('inviteLinkInput');
+        if (!inp.value) return;
+        try {
+            await navigator.clipboard.writeText(inp.value);
+            inp.select();
+        } catch(e) {
+            inp.select();
+            document.execCommand('copy');
+        }
+    }
+
+    async function resetInviteLink() {
+        if (!confirm('Сбросить ссылку? Старая перестанет работать.')) return;
+        const r = await fetch(`/group/${GROUP_ID}/reset_invite_link`, {method:'POST'});
+        const d = await r.json();
+        if (d.invite_link) {
+            document.getElementById('inviteLinkInput').value = d.invite_link;
+        }
+    }
+
+    // ── Join requests ────────────────────────────────────────────────────────
+    {% if current_membership.role in ['owner', 'admin'] and group.join_type == 'request' %}
+    async function loadJoinRequests() {
+        try {
+            const r = await fetch(`/group/${GROUP_ID}/join_requests`);
+            const d = await r.json();
+            const list = document.getElementById('requestsList');
+            const badge = document.getElementById('requestsBadge');
+
+            if (d.count > 0) {
+                badge.textContent = d.count;
+                badge.style.display = 'inline-block';
+                list.innerHTML = d.requests.map(req => `
+                    <div class="member-item" id="req-${req.id}" style="margin-bottom:8px;">
+                        <img src="/static/uploads/${req.avatar}" class="member-avatar"
+                             onerror="this.src='/static/uploads/avatars/default.png'"
+                             onclick="window.location.href='/profile/${req.user_id}'"
+                             style="cursor:pointer;">
+                        <div class="member-info">
+                            <div class="member-name">${req.username}</div>
+                            <span style="font-size:12px; color:var(--text-secondary);">${req.created_at}</span>
+                        </div>
+                        <div class="member-actions" style="gap:6px;">
+                            <button class="btn btn-sm" style="background:var(--accent);color:#fff;padding:6px 12px;border-radius:8px;"
+                                    onclick="approveRequest(${req.id})">Принять</button>
+                            <button class="btn btn-sm btn-secondary" style="padding:6px 12px;border-radius:8px;"
+                                    onclick="rejectRequest(${req.id})">Отклонить</button>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                badge.style.display = 'none';
+                list.innerHTML = '<p style="color:var(--text-secondary);font-size:14px;">Нет новых заявок</p>';
+            }
+        } catch(e) {
+            document.getElementById('requestsList').innerHTML = '<p style="color:var(--text-secondary);font-size:14px;">Ошибка загрузки</p>';
+        }
+    }
+
+    async function approveRequest(reqId) {
+        const r = await fetch(`/group/${GROUP_ID}/join_requests/${reqId}/approve`, {method:'POST'});
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById(`req-${reqId}`)?.remove();
+            loadJoinRequests();
+        } else { alert(d.error || 'Ошибка'); }
+    }
+
+    async function rejectRequest(reqId) {
+        const r = await fetch(`/group/${GROUP_ID}/join_requests/${reqId}/reject`, {method:'POST'});
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById(`req-${reqId}`)?.remove();
+            loadJoinRequests();
+        } else { alert(d.error || 'Ошибка'); }
+    }
+
+    loadJoinRequests();
+    {% endif %}
+
+    // ── Add member ────────────────────────────────────────────────────────────
     function showAddMemberModal() {
         document.getElementById('addMemberModal').classList.add('active');
     }
@@ -188,35 +348,22 @@
 
     document.getElementById('addMemberForm').addEventListener('submit', function(e) {
         e.preventDefault();
-
         const formData = new FormData(this);
-
-        fetch('/group/{{ group.id }}/add_member', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
+        fetch('/group/{{ group.id }}/add_member', {method: 'POST', body: formData})
+        .then(r => r.json())
         .then(data => {
-            if (data.success) {
-                location.reload();
-            } else {
-                alert(data.error || 'Ошибка при добавлении участника');
-            }
+            if (data.success) { location.reload(); }
+            else { alert(data.error || 'Ошибка при добавлении участника'); }
         });
     });
 
     function removeMember(userId) {
         if (confirm('Удалить участника из группы?')) {
-            fetch(`/group/{{ group.id }}/remove_member/${userId}`, {
-                method: 'POST'
-            })
-            .then(response => response.json())
+            fetch(`/group/{{ group.id }}/remove_member/${userId}`, {method: 'POST'})
+            .then(r => r.json())
             .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert(data.error || 'Ошибка при удалении участника');
-                }
+                if (data.success) { location.reload(); }
+                else { alert(data.error || 'Ошибка при удалении участника'); }
             });
         }
     }
@@ -226,35 +373,28 @@
         if (confirm(`Назначить пользователя ${roleName}?`)) {
             const formData = new FormData();
             formData.append('role', role);
-
-            fetch(`/group/{{ group.id }}/change_role/${userId}`, {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
+            fetch(`/group/{{ group.id }}/change_role/${userId}`, {method: 'POST', body: formData})
+            .then(r => r.json())
             .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert(data.error || 'Ошибка при изменении роли');
-                }
+                if (data.success) { location.reload(); }
+                else { alert(data.error || 'Ошибка при изменении роли'); }
             });
         }
     }
 
-    // Закрытие модальных окон
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', function(e) {
-            if (e.target === this) {
-                this.classList.remove('active');
-            }
+            if (e.target === this) this.classList.remove('active');
         });
     });
 
-    document.addEventListener('keydown', function(event) {
-        if (event.key === 'Escape') {
-            hideAddMemberModal();
-        }
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') hideAddMemberModal();
     });
+
+    // Загружаем invite-ссылку при загрузке страницы
+    {% if current_membership.role in ['owner', 'admin'] %}
+    loadInviteLink();
+    {% endif %}
 </script>
 {% endblock %}

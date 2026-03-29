@@ -76,6 +76,10 @@ class Config:
     # Push-уведомления (ntfy)
     NTFY_SERVER = os.environ.get('NTFY_SERVER', 'https://ntfy.sh')
 
+    # Базовый URL для invite-ссылок групп (укажи домен или IP:порт, без слэша на конце)
+    # Пример: "https://example.com" или "http://192.168.1.10:5000"
+    LINK_URL = os.environ.get('LINK_URL', '')
+
     # Продакшен: раскомментируй при HTTPS:
     # SESSION_COOKIE_SECURE = True
     # REMEMBER_COOKIE_SECURE = True

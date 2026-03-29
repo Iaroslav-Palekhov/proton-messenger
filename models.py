@@ -33,8 +33,21 @@ class Group(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_message_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Видимость: 'public' (индексируется, ссылка публична) или 'private' (только по ссылке/юзернейму)
+    visibility = db.Column(db.String(20), default='private', nullable=False)
+
+    # Тип вступления: 'open' (сразу) или 'request' (заявка → одобрение админа)
+    join_type = db.Column(db.String(20), default='open', nullable=False)
+
+    # Уникальный юзернейм группы (опционально, для поиска/вступления)
+    group_username = db.Column(db.String(50), unique=True, nullable=True, index=True)
+
+    # Уникальный токен для invite-ссылки
+    invite_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
+
     members = db.relationship('GroupMember', backref='group', lazy=True, cascade='all, delete-orphan')
     messages = db.relationship('Message', backref='group', lazy=True)
+    join_requests = db.relationship('GroupJoinRequest', backref='group', lazy=True, cascade='all, delete-orphan')
 
 class GroupMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -44,6 +57,23 @@ class GroupMember(db.Model):
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (db.UniqueConstraint('group_id', 'user_id', name='unique_group_member'),)
+
+class GroupJoinRequest(db.Model):
+    """Заявка на вступление в закрытую группу."""
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    # 'pending' | 'approved' | 'rejected'
+    status = db.Column(db.String(20), default='pending', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('join_requests', lazy=True))
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_id])
+
+    __table_args__ = (db.UniqueConstraint('group_id', 'user_id', name='unique_join_request'),)
+
 
 class Chat(db.Model):
     id = db.Column(db.Integer, primary_key=True)

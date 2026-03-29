@@ -13,7 +13,7 @@ import zipfile
 import io
 import shutil
 
-from models import User, Group, GroupMember, Chat, Message, ForwardedMessage, PasswordReset, UserSession, BlockedUser, Contact, UserPrivacy
+from models import User, Group, GroupMember, GroupJoinRequest, Chat, Message, ForwardedMessage, PasswordReset, UserSession, BlockedUser, Contact, UserPrivacy
 from socketio_events import socketio
 from utils import (
     compress_image, get_file_category, get_file_icon,
@@ -1046,14 +1046,35 @@ def register_routes(app, db, login_manager):
         name        = request.form.get('name')
         description = request.form.get('description', '')
         icon        = request.files.get('icon')
+        visibility  = request.form.get('visibility', 'private')
+        join_type   = request.form.get('join_type', 'open')
+        group_username = request.form.get('group_username', '').strip() or None
 
         if not name:
             return jsonify({'error': 'Название группы обязательно'}), 400
 
+        # Публичная группа не может быть приватной по видимости — именно так и есть,
+        # но если visibility='public', join_type может быть любым (open или request).
+        # Если visibility='private', join_type тоже свободен.
+        if visibility not in ('public', 'private'):
+            visibility = 'private'
+        if join_type not in ('open', 'request'):
+            join_type = 'open'
+
+        if group_username:
+            if len(group_username) > 50 or not group_username.replace('_', '').isalnum():
+                return jsonify({'error': 'Юзернейм может содержать только буквы, цифры и _'}), 400
+            if Group.query.filter_by(group_username=group_username).first():
+                return jsonify({'error': 'Юзернейм уже занят'}), 400
+
         group = Group(
             name=name,
             description=description,
-            owner_id=current_user.id
+            owner_id=current_user.id,
+            visibility=visibility,
+            join_type=join_type,
+            group_username=group_username,
+            invite_token=secrets.token_urlsafe(32)
         )
 
         if icon and icon.filename:
@@ -1087,7 +1108,17 @@ def register_routes(app, db, login_manager):
         ).first()
 
         if not membership:
-            return redirect(url_for('groups'))
+            # Показываем превью-страницу для вступления
+            pending_request = GroupJoinRequest.query.filter_by(
+                group_id=group_id,
+                user_id=current_user.id,
+                status='pending'
+            ).first()
+            members_count = GroupMember.query.filter_by(group_id=group_id).count()
+            return render_template('group_join_preview.html',
+                                   group=group,
+                                   pending_request=pending_request,
+                                   members_count=members_count)
 
         # Только последние 50 сообщений
         messages = Message.query.filter_by(group_id=group_id, is_deleted=False).options(
@@ -1241,15 +1272,38 @@ def register_routes(app, db, login_manager):
         if not membership or membership.role not in ['owner', 'admin']:
             return jsonify({'error': 'Недостаточно прав'}), 403
 
-        name        = request.form.get('name')
-        description = request.form.get('description')
-        icon        = request.files.get('icon')
+        name           = request.form.get('name')
+        description    = request.form.get('description')
+        icon           = request.files.get('icon')
+        visibility     = request.form.get('visibility')
+        join_type      = request.form.get('join_type')
+        group_username = request.form.get('group_username', '').strip() or None
 
         if name:
             group.name = name
 
         if description is not None:
             group.description = description
+
+        if visibility in ('public', 'private'):
+            group.visibility = visibility
+
+        if join_type in ('open', 'request'):
+            group.join_type = join_type
+
+        if group_username is not None:
+            if group_username == '':
+                group.group_username = None
+            else:
+                if len(group_username) > 50 or not group_username.replace('_', '').isalnum():
+                    return jsonify({'error': 'Юзернейм может содержать только буквы, цифры и _'}), 400
+                existing = Group.query.filter(
+                    Group.group_username == group_username,
+                    Group.id != group_id
+                ).first()
+                if existing:
+                    return jsonify({'error': 'Юзернейм уже занят'}), 400
+                group.group_username = group_username
 
         if icon and icon.filename:
             try:
@@ -1277,6 +1331,195 @@ def register_routes(app, db, login_manager):
         group.write_permission = permission
         db.session.commit()
         return jsonify({'success': True, 'write_permission': group.write_permission})
+
+    # ── Invite link: получить / сбросить ─────────────────────────────────────
+
+    @app.route('/group/<int:group_id>/invite_link', methods=['GET'])
+    @login_required
+    def get_invite_link(group_id):
+        group = Group.query.get_or_404(group_id)
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership:
+            return jsonify({'error': 'Вы не в группе'}), 403
+        base = app.config.get('LINK_URL', '').rstrip('/')
+        link = f"{base}/join/{group.invite_token}" if base else f"/join/{group.invite_token}"
+        return jsonify({'invite_link': link, 'token': group.invite_token})
+
+    @app.route('/group/<int:group_id>/reset_invite_link', methods=['POST'])
+    @login_required
+    def reset_invite_link(group_id):
+        group = Group.query.get_or_404(group_id)
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            return jsonify({'error': 'Недостаточно прав'}), 403
+        group.invite_token = secrets.token_urlsafe(32)
+        db.session.commit()
+        base = app.config.get('LINK_URL', '').rstrip('/')
+        link = f"{base}/join/{group.invite_token}" if base else f"/join/{group.invite_token}"
+        return jsonify({'invite_link': link, 'token': group.invite_token})
+
+    # ── Вступление по ссылке (/join/<token>) ─────────────────────────────────
+
+    @app.route('/join/<token>')
+    @login_required
+    def join_by_invite(token):
+        group = Group.query.filter_by(invite_token=token).first_or_404()
+        existing = GroupMember.query.filter_by(group_id=group.id, user_id=current_user.id).first()
+        if existing:
+            return redirect(url_for('group_chat', group_id=group.id))
+        members_count = GroupMember.query.filter_by(group_id=group.id).count()
+        pending_request = GroupJoinRequest.query.filter_by(
+            group_id=group.id, user_id=current_user.id, status='pending'
+        ).first()
+        return render_template('group_join_preview.html',
+                               group=group,
+                               pending_request=pending_request,
+                               members_count=members_count,
+                               via_token=token)
+
+    # ── Вступление по юзернейму группы (/g/<username>) ───────────────────────
+
+    @app.route('/g/<group_username>')
+    @login_required
+    def join_by_username(group_username):
+        group = Group.query.filter_by(group_username=group_username).first_or_404()
+        existing = GroupMember.query.filter_by(group_id=group.id, user_id=current_user.id).first()
+        if existing:
+            return redirect(url_for('group_chat', group_id=group.id))
+        members_count = GroupMember.query.filter_by(group_id=group.id).count()
+        pending_request = GroupJoinRequest.query.filter_by(
+            group_id=group.id, user_id=current_user.id, status='pending'
+        ).first()
+        return render_template('group_join_preview.html',
+                               group=group,
+                               pending_request=pending_request,
+                               members_count=members_count)
+
+    # ── POST: непосредственное вступление / отправка заявки ──────────────────
+
+    @app.route('/group/<int:group_id>/join', methods=['POST'])
+    @login_required
+    def join_group(group_id):
+        group = Group.query.get_or_404(group_id)
+        existing = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if existing:
+            return jsonify({'error': 'Вы уже в группе'}), 400
+
+        if group.join_type == 'open':
+            new_member = GroupMember(group_id=group_id, user_id=current_user.id, role='member')
+            db.session.add(new_member)
+            db.session.commit()
+            return jsonify({'success': True, 'joined': True,
+                            'redirect': url_for('group_chat', group_id=group_id)})
+        else:
+            # Закрытая группа — создаём заявку
+            existing_req = GroupJoinRequest.query.filter_by(
+                group_id=group_id, user_id=current_user.id
+            ).first()
+            if existing_req:
+                if existing_req.status == 'pending':
+                    return jsonify({'error': 'Заявка уже отправлена'}), 400
+                if existing_req.status == 'rejected':
+                    # Разрешаем подать заново
+                    existing_req.status = 'pending'
+                    existing_req.created_at = datetime.utcnow()
+                    existing_req.reviewed_at = None
+                    existing_req.reviewed_by_id = None
+                    db.session.commit()
+                    return jsonify({'success': True, 'joined': False,
+                                    'message': 'Заявка на вступление отправлена'})
+            req = GroupJoinRequest(group_id=group_id, user_id=current_user.id)
+            db.session.add(req)
+            db.session.commit()
+            return jsonify({'success': True, 'joined': False,
+                            'message': 'Заявка на вступление отправлена'})
+
+    # ── Список заявок (для админов) ───────────────────────────────────────────
+
+    @app.route('/group/<int:group_id>/join_requests')
+    @login_required
+    def group_join_requests(group_id):
+        group = Group.query.get_or_404(group_id)
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            return jsonify({'error': 'Недостаточно прав'}), 403
+        pending = GroupJoinRequest.query.filter_by(
+            group_id=group_id, status='pending'
+        ).options(joinedload(GroupJoinRequest.user)).order_by(GroupJoinRequest.created_at).all()
+        result = [{
+            'id': r.id,
+            'user_id': r.user_id,
+            'username': r.user.username,
+            'avatar': r.user.avatar,
+            'created_at': r.created_at.strftime('%d.%m.%Y %H:%M')
+        } for r in pending]
+        return jsonify({'requests': result, 'count': len(result)})
+
+    # ── Одобрить / отклонить заявку ───────────────────────────────────────────
+
+    @app.route('/group/<int:group_id>/join_requests/<int:request_id>/approve', methods=['POST'])
+    @login_required
+    def approve_join_request(group_id, request_id):
+        group = Group.query.get_or_404(group_id)
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            return jsonify({'error': 'Недостаточно прав'}), 403
+        req = GroupJoinRequest.query.filter_by(id=request_id, group_id=group_id).first_or_404()
+        if req.status != 'pending':
+            return jsonify({'error': 'Заявка уже обработана'}), 400
+        # Проверим, вдруг уже член
+        existing = GroupMember.query.filter_by(group_id=group_id, user_id=req.user_id).first()
+        if not existing:
+            new_member = GroupMember(group_id=group_id, user_id=req.user_id, role='member')
+            db.session.add(new_member)
+        req.status = 'approved'
+        req.reviewed_at = datetime.utcnow()
+        req.reviewed_by_id = current_user.id
+        db.session.commit()
+        return jsonify({'success': True})
+
+    @app.route('/group/<int:group_id>/join_requests/<int:request_id>/reject', methods=['POST'])
+    @login_required
+    def reject_join_request(group_id, request_id):
+        group = Group.query.get_or_404(group_id)
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            return jsonify({'error': 'Недостаточно прав'}), 403
+        req = GroupJoinRequest.query.filter_by(id=request_id, group_id=group_id).first_or_404()
+        if req.status != 'pending':
+            return jsonify({'error': 'Заявка уже обработана'}), 400
+        req.status = 'rejected'
+        req.reviewed_at = datetime.utcnow()
+        req.reviewed_by_id = current_user.id
+        db.session.commit()
+        return jsonify({'success': True})
+
+    # ── Поиск публичных групп ─────────────────────────────────────────────────
+
+    @app.route('/groups/search')
+    @login_required
+    def search_groups():
+        q = request.args.get('q', '').strip()
+        if not q:
+            return jsonify({'groups': []})
+        results = Group.query.filter(
+            Group.visibility == 'public',
+            Group.name.ilike(f'%{q}%')
+        ).limit(20).all()
+        data = []
+        for g in results:
+            is_member = bool(GroupMember.query.filter_by(group_id=g.id, user_id=current_user.id).first())
+            data.append({
+                'id': g.id,
+                'name': g.name,
+                'description': g.description,
+                'icon': url_for('static', filename=f'uploads/{g.icon}'),
+                'members_count': GroupMember.query.filter_by(group_id=g.id).count(),
+                'join_type': g.join_type,
+                'group_username': g.group_username,
+                'is_member': is_member
+            })
+        return jsonify({'groups': data})
 
     @app.route('/group/<int:group_id>/delete', methods=['POST'])
     @login_required

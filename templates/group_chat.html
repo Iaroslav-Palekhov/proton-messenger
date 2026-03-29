@@ -1331,22 +1331,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Загрузка пропущенных сообщений при переподключении WS
+    // Загрузка пропущенных сообщений при переподключении — только через WebSocket
     function updateMessages() {
-        fetch(`/get_messages/${currentGroupId}?last_id=${lastMessageId}&is_group=true`)
-            .then(response => response.json())
-            .then(messages => {
-                if (messages.length > 0) {
-                    const container = document.getElementById('messagesContainer');
-                    const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-                    messages.forEach(message => {
-                        addMessageToChat(message);
-                        if (message.id > lastMessageId) lastMessageId = message.id;
-                    });
-                    if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
-                    else container.scrollTop = container.scrollHeight - scrollPosition;
-                }
-            })
-            .catch(err => console.error('[Group] Ошибка загрузки пропущенных:', err));
+        if (window._groupSocket) {
+            window._groupSocket.emit('request_missed_messages', { group_id: currentGroupId, last_id: lastMessageId });
+        }
     }
 
     // ====== WebSocket для группового чата ======
@@ -1457,6 +1446,46 @@ document.addEventListener('DOMContentLoaded', function() {
             if (contentDiv && !contentDiv.querySelector('.link-preview') && data.link_url) {
                 if (typeof injectLinkPreview === 'function') injectLinkPreview(contentDiv, data);
             }
+        });
+
+        // Пропущенные сообщения (ответ на request_missed_messages при reconnect)
+        socket.on('missed_messages', (data) => {
+            if (!data.messages || !data.messages.length) return;
+            const container = document.getElementById('messagesContainer');
+            const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+            data.messages.forEach(message => {
+                addMessageToChat(message);
+                if (message.id > lastMessageId) lastMessageId = message.id;
+            });
+            if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
+        });
+
+        // Закрепление / открепление через WebSocket
+        socket.on('pin_updated', (data) => {
+            if (data.action === 'pinned') {
+                showNotification('Сообщение закреплено', 'success');
+                const msg = document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+                if (msg) {
+                    const pinBtn = msg.querySelector(`button[onclick="pinMessage(${data.message_id})"]`);
+                    if (pinBtn) {
+                        pinBtn.title = 'Открепить';
+                        pinBtn.style.opacity = '0.6';
+                        pinBtn.setAttribute('onclick', `unpinMessage(${data.message_id})`);
+                    }
+                }
+            } else {
+                showNotification('Сообщение откреплено', 'info');
+                const msg = document.querySelector(`.message[data-message-id="${data.message_id}"]`);
+                if (msg) {
+                    const unpinBtn = msg.querySelector(`button[onclick="unpinMessage(${data.message_id})"]`);
+                    if (unpinBtn) {
+                        unpinBtn.title = 'Закрепить';
+                        unpinBtn.style.opacity = '1';
+                        unpinBtn.setAttribute('onclick', `pinMessage(${data.message_id})`);
+                    }
+                }
+            }
+            refreshPinnedBanner();
         });
 
         // Сообщение удалено
@@ -1737,28 +1766,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Polling для link preview: опрашиваем сервер пока не получим превью (макс 6 попыток)
+    // Превью ссылок доставляется через WebSocket (link_preview_ready) — polling не нужен
     function pollForLinkPreview(messageId, messageEl, attempts) {
-        attempts = attempts || 0;
-        if (attempts >= 8) return;
-        setTimeout(() => {
-            fetch(`/get_messages/${currentGroupId}?last_id=${messageId - 1}&is_group=true`)
-                .then(r => r.json())
-                .then(messages => {
-                    const msg = messages.find(m => m.id == messageId);
-                    if (msg && msg.link_url) {
-                        const el = document.querySelector(`.message[data-message-id="${messageId}"]`) || messageEl;
-                        if (el) {
-                            const contentDiv = el.querySelector('.message-content');
-                            if (contentDiv && !contentDiv.querySelector('.link-preview')) {
-                                injectLinkPreview(contentDiv, msg);
-                            }
-                        }
-                    } else {
-                        pollForLinkPreview(messageId, messageEl, attempts + 1);
-                    }
-                })
-                .catch(() => {});
-        }, 2000);
+        // Устарело: превью ссылок теперь доставляется через WebSocket (link_preview_ready)
+        // Оставлено для совместимости вызовов, реального HTTP-polling нет
     }
 
     // Функция восстановления при ошибке
@@ -2584,50 +2595,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ========== ЗАКРЕПЛЕНИЕ СООБЩЕНИЙ ==========
     function pinMessage(messageId) {
-        fetch(`/pin_message/${messageId}`, { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showNotification('Сообщение закреплено', 'success');
-                    refreshPinnedBanner();
-                    // Обновляем кнопку в DOM — заменяем «Закрепить» на «Открепить»
-                    const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                    if (msg) {
-                        const pinBtn = msg.querySelector(`button[onclick="pinMessage(${messageId})"]`);
-                        if (pinBtn) {
-                            pinBtn.title = 'Открепить';
-                            pinBtn.style.opacity = '0.6';
-                            pinBtn.setAttribute('onclick', `unpinMessage(${messageId})`);
-                        }
-                    }
-                } else {
-                    alert(data.error || 'Ошибка');
-                }
-            });
+        if (window._groupSocket) {
+            window._groupSocket.emit('pin_message', { message_id: messageId });
+        }
     }
 
     function unpinMessage(messageId) {
         if (!confirm('Открепить это сообщение?')) return;
-        fetch(`/unpin_message/${messageId}`, { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showNotification('Сообщение откреплено', 'info');
-                    refreshPinnedBanner();
-                    // Обновляем кнопку в DOM — заменяем «Открепить» на «Закрепить»
-                    const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                    if (msg) {
-                        const unpinBtn = msg.querySelector(`button[onclick="unpinMessage(${messageId})"]`);
-                        if (unpinBtn) {
-                            unpinBtn.title = 'Закрепить';
-                            unpinBtn.style.opacity = '1';
-                            unpinBtn.setAttribute('onclick', `pinMessage(${messageId})`);
-                        }
-                    }
-                } else {
-                    alert(data.error || 'Ошибка');
-                }
-            });
+        if (window._groupSocket) {
+            window._groupSocket.emit('unpin_message', { message_id: messageId });
+        }
     }
 
     function refreshPinnedBanner() {
@@ -3542,6 +3519,60 @@ document.addEventListener('DOMContentLoaded', function() {
                 <textarea name="description" placeholder="Опишите тему группы..." rows="4">{{ group.description }}</textarea>
             </div>
 
+            <div class="form-group">
+                <label>Юзернейм группы <span style="color:var(--text-secondary);font-weight:400;">(необязательно)</span></label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:var(--text-secondary);font-size:15px;">@</span>
+                    <input type="text" name="group_username"
+                           value="{{ group.group_username or '' }}"
+                           placeholder="my_group"
+                           pattern="[A-Za-z0-9_]+"
+                           maxlength="50"
+                           style="flex:1;">
+                </div>
+                <small style="color:var(--text-secondary);">Буквы, цифры, _. По нему можно найти/вступить: /g/username</small>
+            </div>
+
+            <div class="form-group">
+                <label>Видимость группы</label>
+                <div style="display:flex;gap:8px;">
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid {% if group.visibility == 'public' %}var(--accent){% else %}transparent{% endif %};" id="vis-public-lbl">
+                        <input type="radio" name="visibility" value="public" {% if group.visibility == 'public' %}checked{% endif %} onchange="updateVisibilityUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">🌐 Публичная</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Видна в поиске</div>
+                        </div>
+                    </label>
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid {% if group.visibility != 'public' %}var(--accent){% else %}transparent{% endif %};" id="vis-private-lbl">
+                        <input type="radio" name="visibility" value="private" {% if group.visibility != 'public' %}checked{% endif %} onchange="updateVisibilityUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">🔒 Приватная</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Только по ссылке</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Тип вступления</label>
+                <div style="display:flex;gap:8px;">
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid {% if group.join_type == 'open' %}var(--accent){% else %}transparent{% endif %};" id="jt-open-lbl">
+                        <input type="radio" name="join_type" value="open" {% if group.join_type == 'open' %}checked{% endif %} onchange="updateJoinTypeUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">✅ Открытая</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Вступить сразу</div>
+                        </div>
+                    </label>
+                    <label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;border:2px solid {% if group.join_type == 'request' %}var(--accent){% else %}transparent{% endif %};" id="jt-request-lbl">
+                        <input type="radio" name="join_type" value="request" {% if group.join_type == 'request' %}checked{% endif %} onchange="updateJoinTypeUI()" style="accent-color:var(--accent);">
+                        <div>
+                            <div style="font-size:13px;font-weight:600;">📋 По заявке</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">Админ одобряет</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
             <div style="display: flex; gap: 10px;">
                 <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="hideEditGroupModal()">Отмена</button>
                 <button type="submit" class="btn" style="flex: 1;">
@@ -3593,16 +3624,9 @@ document.addEventListener('DOMContentLoaded', function() {
 // Удаление сообщения
 function deleteMessage(messageId) {
     if (!confirm('Удалить это сообщение?')) return;
-    fetch(`/delete_message/${messageId}`, { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) msg.remove();
-            } else {
-                alert(data.error || 'Ошибка при удалении');
-            }
-        });
+    if (window._groupSocket) {
+        window._groupSocket.emit('delete_message', { message_id: messageId });
+    }
 }
 
 // Редактирование сообщения
@@ -3644,30 +3668,10 @@ function submitEdit(messageId, btn) {
     const newText = modal.querySelector('#editMessageText').value.trim();
     if (!newText) return alert('Текст не может быть пустым');
 
-    const formData = new FormData();
-    formData.append('content', newText);
-
-    fetch(`/edit_message/${messageId}`, { method: 'POST', body: formData })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const msg = document.querySelector(`.message[data-message-id="${messageId}"]`);
-                if (msg) {
-                    const p = msg.querySelector('.message-content p');
-                    if (p) p.textContent = data.content;
-                    const meta = msg.querySelector('.message-meta');
-                    if (meta && !meta.querySelector('.edited-label')) {
-                        const span = document.createElement('span');
-                        span.className = 'edited-label';
-                        span.textContent = 'отредактировано';
-                        meta.insertBefore(span, meta.firstChild);
-                    }
-                }
-                modal.remove();
-            } else {
-                alert(data.error || 'Ошибка при редактировании');
-            }
-        });
+    if (window._groupSocket) {
+        window._groupSocket.emit('edit_message', { message_id: messageId, content: newText });
+    }
+    modal.remove();
 }
 </script>
 
@@ -3814,6 +3818,22 @@ function submitEdit(messageId, btn) {
             });
         }
     });
+
+    // ── Visibility / join_type toggle UI ────────────────────────────────────
+    function updateVisibilityUI() {
+        const pub = document.querySelector('input[name="visibility"][value="public"]')?.checked;
+        const pubLbl = document.getElementById('vis-public-lbl');
+        const privLbl = document.getElementById('vis-private-lbl');
+        if (pubLbl) pubLbl.style.borderColor = pub ? 'var(--accent)' : 'transparent';
+        if (privLbl) privLbl.style.borderColor = !pub ? 'var(--accent)' : 'transparent';
+    }
+    function updateJoinTypeUI() {
+        const open = document.querySelector('input[name="join_type"][value="open"]')?.checked;
+        const openLbl = document.getElementById('jt-open-lbl');
+        const reqLbl  = document.getElementById('jt-request-lbl');
+        if (openLbl) openLbl.style.borderColor = open ? 'var(--accent)' : 'transparent';
+        if (reqLbl)  reqLbl.style.borderColor  = !open ? 'var(--accent)' : 'transparent';
+    }
 </script>
 
 </div>{# /ds-content #}

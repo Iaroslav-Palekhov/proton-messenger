@@ -510,6 +510,167 @@ def broadcast_chat_deleted(chat_id: int, user1_id: int, user2_id: int):
 
 
 # ──────────────────────────────────────────────
+# Удаление сообщения через WebSocket
+# ──────────────────────────────────────────────
+
+@socketio.on("delete_message")
+def on_delete_message(data):
+    """Удаляет сообщение и рассылает уведомление всем участникам комнаты."""
+    if not current_user.is_authenticated:
+        return
+    message_id = data.get("message_id")
+    if not message_id:
+        return
+
+    from models import Message
+    msg = Message.query.get(message_id)
+    if not msg:
+        emit("error", {"message": "Сообщение не найдено"})
+        return
+    if msg.sender_id != current_user.id:
+        emit("error", {"message": "Нет прав для удаления"})
+        return
+
+    chat_id = msg.chat_id
+    group_id = msg.group_id
+    msg.is_deleted = True
+    msg.content = None
+    db.session.commit()
+
+    payload = {"message_id": message_id}
+    if chat_id:
+        socketio.emit("message_deleted", payload, to=f"chat_{chat_id}")
+    elif group_id:
+        socketio.emit("message_deleted", payload, to=f"group_{group_id}")
+
+
+# ──────────────────────────────────────────────
+# Редактирование сообщения через WebSocket
+# ──────────────────────────────────────────────
+
+@socketio.on("edit_message")
+def on_edit_message(data):
+    """Редактирует сообщение и рассылает обновление всем участникам комнаты."""
+    if not current_user.is_authenticated:
+        return
+    message_id = data.get("message_id")
+    new_content = (data.get("content") or "").strip()
+    if not message_id or not new_content:
+        return
+
+    from models import Message
+    msg = Message.query.get(message_id)
+    if not msg:
+        emit("error", {"message": "Сообщение не найдено"})
+        return
+    if msg.sender_id != current_user.id:
+        emit("error", {"message": "Нет прав для редактирования"})
+        return
+
+    chat_id = msg.chat_id
+    group_id = msg.group_id
+    msg.content = new_content
+    msg.is_edited = True
+    db.session.commit()
+
+    payload = {"message_id": message_id, "content": new_content}
+    if chat_id:
+        socketio.emit("message_edited", payload, to=f"chat_{chat_id}")
+    elif group_id:
+        socketio.emit("message_edited", payload, to=f"group_{group_id}")
+
+
+# ──────────────────────────────────────────────
+# Закрепление / открепление через WebSocket
+# ──────────────────────────────────────────────
+
+@socketio.on("pin_message")
+def on_pin_message(data):
+    """Закрепляет сообщение и рассылает событие всем участникам комнаты."""
+    if not current_user.is_authenticated:
+        return
+    message_id = data.get("message_id")
+    if not message_id:
+        return
+
+    from models import Message, GroupMember, Chat
+    msg = Message.query.get(message_id)
+    if not msg:
+        emit("error", {"message": "Сообщение не найдено"})
+        return
+
+    if msg.chat_id:
+        chat_obj = Chat.query.get(msg.chat_id)
+        if not chat_obj or (chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id):
+            emit("error", {"message": "Нет доступа"})
+            return
+    elif msg.group_id:
+        membership = GroupMember.query.filter_by(group_id=msg.group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ["owner", "admin"]:
+            emit("error", {"message": "Только администраторы могут закреплять сообщения"})
+            return
+
+    msg.is_pinned = True
+    msg.pinned_by_id = current_user.id
+    msg.pinned_at = datetime.utcnow()
+    db.session.commit()
+
+    sender = msg.sender
+    payload = {
+        "message_id": msg.id,
+        "content": msg.content,
+        "sender_name": sender.username if sender else "Unknown",
+        "timestamp": msg.timestamp.strftime("%H:%M"),
+        "has_image": bool(msg.image_path),
+        "has_file": bool(msg.file_path),
+        "file_name": msg.file_name,
+        "action": "pinned",
+    }
+    if msg.chat_id:
+        socketio.emit("pin_updated", payload, to=f"chat_{msg.chat_id}")
+    elif msg.group_id:
+        socketio.emit("pin_updated", payload, to=f"group_{msg.group_id}")
+
+
+@socketio.on("unpin_message")
+def on_unpin_message(data):
+    """Открепляет сообщение и рассылает событие всем участникам комнаты."""
+    if not current_user.is_authenticated:
+        return
+    message_id = data.get("message_id")
+    if not message_id:
+        return
+
+    from models import Message, GroupMember, Chat
+    msg = Message.query.get(message_id)
+    if not msg:
+        emit("error", {"message": "Сообщение не найдено"})
+        return
+
+    if msg.chat_id:
+        chat_obj = Chat.query.get(msg.chat_id)
+        if not chat_obj or (chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id):
+            emit("error", {"message": "Нет доступа"})
+            return
+    elif msg.group_id:
+        membership = GroupMember.query.filter_by(group_id=msg.group_id, user_id=current_user.id).first()
+        if not membership or membership.role not in ["owner", "admin"]:
+            emit("error", {"message": "Только администраторы могут откреплять сообщения"})
+            return
+
+    msg.is_pinned = False
+    msg.pinned_by_id = None
+    msg.pinned_at = None
+    db.session.commit()
+
+    payload = {"message_id": message_id, "action": "unpinned"}
+    if msg.chat_id:
+        socketio.emit("pin_updated", payload, to=f"chat_{msg.chat_id}")
+    elif msg.group_id:
+        socketio.emit("pin_updated", payload, to=f"group_{msg.group_id}")
+
+
+# ──────────────────────────────────────────────
 # Heartbeat
 # ──────────────────────────────────────────────
 
@@ -520,3 +681,49 @@ def on_heartbeat():
     current_user.status = "online"
     current_user.last_seen = datetime.utcnow()
     db.session.commit()
+
+
+# ──────────────────────────────────────────────
+# Запрос пропущенных сообщений (при reconnect)
+# ──────────────────────────────────────────────
+
+@socketio.on("request_missed_messages")
+def on_request_missed_messages(data):
+    """
+    Клиент запрашивает пропущенные сообщения после переподключения.
+    Вместо HTTP-fetch — через WebSocket.
+    data: { chat_id или group_id, last_id }
+    """
+    if not current_user.is_authenticated:
+        return
+
+    from flask import current_app
+    _app = current_app._get_current_object()
+
+    chat_id = data.get("chat_id")
+    group_id = data.get("group_id")
+    last_id = int(data.get("last_id") or 0)
+
+    if chat_id:
+        chat = Chat.query.get(chat_id)
+        if not chat:
+            return
+        if chat.user1_id != current_user.id and chat.user2_id != current_user.id:
+            return
+        messages = Message.query.filter(
+            Message.chat_id == chat_id,
+            Message.id > last_id
+        ).order_by(Message.id.asc()).limit(50).all()
+    elif group_id:
+        membership = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+        if not membership:
+            return
+        messages = Message.query.filter(
+            Message.group_id == group_id,
+            Message.id > last_id
+        ).order_by(Message.id.asc()).limit(50).all()
+    else:
+        return
+
+    serialized = [_serialize_message(m, current_user.id, _app) for m in messages]
+    emit("missed_messages", {"messages": serialized})
