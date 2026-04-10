@@ -27,16 +27,18 @@ def _get_or_create_secret_key():
 class Config:
     # Базовые настройки
     SECRET_KEY = _get_or_create_secret_key()
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///database.db')
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        'DATABASE_URL',
+        'postgresql+psycopg2://user:password@localhost:5432/messenger'
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # Оптимизация SQLAlchemy connection pool
+    # Оптимизация SQLAlchemy connection pool для PostgreSQL
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,
-        'pool_recycle': 280,
+        'pool_pre_ping': True,     # проверяет соединение перед использованием
+        'pool_recycle': 280,       # пересоздаёт соединения каждые ~5 минут
         'pool_size': 10,
         'max_overflow': 5,
-        'connect_args': {'check_same_thread': False},
     }
 
     # Кэширование статических файлов (30 дней)
@@ -72,9 +74,6 @@ class Config:
     ]
     COMPRESS_LEVEL = 9       # Баланс скорость/размер (1-9)
     COMPRESS_MIN_SIZE = 100   # Сжимаем только если > 500 байт
-
-    # Push-уведомления (ntfy)
-    NTFY_SERVER = os.environ.get('NTFY_SERVER', 'https://ntfy.sh')
 
     # Базовый URL для invite-ссылок групп (укажи домен или IP:порт, без слэша на конце)
     # Пример: "https://example.com" или "http://192.168.1.10:5000"

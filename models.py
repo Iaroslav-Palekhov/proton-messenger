@@ -2,149 +2,155 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from datetime import datetime
 
+from encryption import EncryptedType
+
 db = SQLAlchemy()
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(200), nullable=False)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    avatar = db.Column(db.String(200), default='avatars/default.png')
-    bio = db.Column(db.String(200), default='')
-    status = db.Column(db.String(50), default='online')
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    push_token = db.Column(db.String(200), default=None, nullable=True)
-    ntfy_server = db.Column(db.String(500), default=None, nullable=True)
 
-    messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy=True)
+    # ── Зашифрованные поля ──────────────────────────────────────
+    # email хранится зашифрованным.
+    # email_hash — детерминированный HMAC-SHA256 для точного поиска (login, forgot_password).
+    email      = db.Column(EncryptedType(254), unique=False, nullable=False)
+    email_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+
+    password   = db.Column(db.String(200), nullable=False)
+    username   = db.Column(db.String(50), unique=True, nullable=False)
+    avatar     = db.Column(db.String(200), default='avatars/default.png')
+    bio        = db.Column(EncryptedType(200), default='')
+    status     = db.Column(db.String(50), default='online')
+    last_seen  = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    messages_sent     = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy=True)
     messages_received = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver', lazy=True)
-    owned_groups = db.relationship('Group', backref='owner', lazy=True)
+    owned_groups      = db.relationship('Group', backref='owner', lazy=True)
     group_memberships = db.relationship('GroupMember', backref='user', lazy=True)
-    sessions = db.relationship('UserSession', backref='user', lazy=True, cascade='all, delete-orphan')
+    sessions          = db.relationship('UserSession', backref='user', lazy=True, cascade='all, delete-orphan')
+
 
 class Group(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.String(500), default='')
-    write_permission = db.Column(db.String(20), default='all', nullable=False)  # 'all' or 'admins_only'
-    icon = db.Column(db.String(200), default='group_icons/default.png')
-    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(EncryptedType(100), nullable=False)
+    description = db.Column(EncryptedType(500), default='')
+    write_permission = db.Column(db.String(20), default='all', nullable=False)
+    icon        = db.Column(db.String(200), default='group_icons/default.png')
+    owner_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     last_message_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Видимость: 'public' (индексируется, ссылка публична) или 'private' (только по ссылке/юзернейму)
-    visibility = db.Column(db.String(20), default='private', nullable=False)
-
-    # Тип вступления: 'open' (сразу) или 'request' (заявка → одобрение админа)
-    join_type = db.Column(db.String(20), default='open', nullable=False)
-
-    # Уникальный юзернейм группы (опционально, для поиска/вступления)
+    visibility     = db.Column(db.String(20), default='private', nullable=False)
+    join_type      = db.Column(db.String(20), default='open', nullable=False)
     group_username = db.Column(db.String(50), unique=True, nullable=True, index=True)
+    invite_token   = db.Column(db.String(64), unique=True, nullable=True, index=True)
 
-    # Уникальный токен для invite-ссылки
-    invite_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
-
-    members = db.relationship('GroupMember', backref='group', lazy=True, cascade='all, delete-orphan')
-    messages = db.relationship('Message', backref='group', lazy=True)
+    members       = db.relationship('GroupMember', backref='group', lazy=True, cascade='all, delete-orphan')
+    messages      = db.relationship('Message', backref='group', lazy=True)
     join_requests = db.relationship('GroupJoinRequest', backref='group', lazy=True, cascade='all, delete-orphan')
 
+
 class GroupMember(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    role = db.Column(db.String(20), default='member')
+    id        = db.Column(db.Integer, primary_key=True)
+    group_id  = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False)
+    user_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role      = db.Column(db.String(20), default='member')
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (db.UniqueConstraint('group_id', 'user_id', name='unique_group_member'),)
 
+
 class GroupJoinRequest(db.Model):
     """Заявка на вступление в закрытую группу."""
-    id = db.Column(db.Integer, primary_key=True)
+    id       = db.Column(db.Integer, primary_key=True)
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False, index=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
-    # 'pending' | 'approved' | 'rejected'
-    status = db.Column(db.String(20), default='pending', nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    reviewed_at = db.Column(db.DateTime, nullable=True)
+    user_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    status   = db.Column(db.String(20), default='pending', nullable=False)
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    reviewed_at    = db.Column(db.DateTime, nullable=True)
     reviewed_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
-    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('join_requests', lazy=True))
+    user        = db.relationship('User', foreign_keys=[user_id], backref=db.backref('join_requests', lazy=True))
     reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_id])
 
     __table_args__ = (db.UniqueConstraint('group_id', 'user_id', name='unique_join_request'),)
 
 
 class Chat(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user1_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    user2_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id        = db.Column(db.Integer, primary_key=True)
+    user1_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user2_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     last_message_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     messages = db.relationship('Message', backref='chat', lazy=True, cascade='all, delete-orphan')
-    user1 = db.relationship('User', foreign_keys=[user1_id])
-    user2 = db.relationship('User', foreign_keys=[user2_id])
+    user1    = db.relationship('User', foreign_keys=[user1_id])
+    user2    = db.relationship('User', foreign_keys=[user2_id])
+
 
 class Message(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    chat_id = db.Column(db.Integer, db.ForeignKey('chat.id'), nullable=True, index=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True, index=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    id          = db.Column(db.Integer, primary_key=True)
+    chat_id     = db.Column(db.Integer, db.ForeignKey('chat.id'), nullable=True, index=True)
+    group_id    = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True, index=True)
+    sender_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
-    content = db.Column(db.Text, nullable=True)
-    image_path = db.Column(db.String(200), nullable=True)
-    file_path = db.Column(db.String(200), nullable=True)
-    file_name = db.Column(db.String(200), nullable=True)
-    file_type = db.Column(db.String(100), nullable=True)
-    file_size = db.Column(db.Integer, nullable=True)
-    file_category = db.Column(db.String(50), nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-    is_read = db.Column(db.Boolean, default=False, index=True)
-    is_edited = db.Column(db.Boolean, default=False)
-    is_deleted = db.Column(db.Boolean, default=False, index=True)
 
-    reply_to_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
+    # ── Зашифрованный контент ───────────────────────────────────
+    content   = db.Column(EncryptedType(), nullable=True)
+
+    image_path    = db.Column(db.String(200), nullable=True)
+    file_path     = db.Column(db.String(200), nullable=True)
+    file_name     = db.Column(db.String(200), nullable=True)
+    file_type     = db.Column(db.String(100), nullable=True)
+    file_size     = db.Column(db.Integer, nullable=True)
+    file_category = db.Column(db.String(50), nullable=True)
+    timestamp     = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    is_read       = db.Column(db.Boolean, default=False, index=True)
+    is_edited     = db.Column(db.Boolean, default=False)
+    is_deleted    = db.Column(db.Boolean, default=False, index=True)
+
+    reply_to_id       = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
     forwarded_from_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
-    is_forwarded = db.Column(db.Boolean, default=False)
+    is_forwarded      = db.Column(db.Boolean, default=False)
     show_forward_sender = db.Column(db.Boolean, default=True)
 
-    reply_to = db.relationship('Message', foreign_keys=[reply_to_id], remote_side=[id], backref='replies')
+    reply_to       = db.relationship('Message', foreign_keys=[reply_to_id], remote_side=[id], backref='replies')
     forwarded_from = db.relationship('Message', foreign_keys=[forwarded_from_id], remote_side=[id], backref='forwarded_copies')
 
-    is_pinned = db.Column(db.Boolean, default=False)
+    is_pinned    = db.Column(db.Boolean, default=False)
     pinned_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
-    pinned_at = db.Column(db.DateTime, nullable=True)
+    pinned_at    = db.Column(db.DateTime, nullable=True)
 
-    link_url = db.Column(db.String(500), nullable=True)
-    link_title = db.Column(db.String(200), nullable=True)
-    link_description = db.Column(db.Text, nullable=True)
-    link_image = db.Column(db.String(500), nullable=True)
-    link_fetched_at = db.Column(db.DateTime, nullable=True)
+    # ── Зашифрованные превью ссылок ─────────────────────────────
+    link_url         = db.Column(db.String(500), nullable=True)
+    link_title       = db.Column(EncryptedType(200), nullable=True)
+    link_description = db.Column(EncryptedType(), nullable=True)
+    link_image       = db.Column(db.String(500), nullable=True)
+    link_fetched_at  = db.Column(db.DateTime, nullable=True)
+
 
 class ForwardedMessage(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    original_message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
+    id                   = db.Column(db.Integer, primary_key=True)
+    original_message_id  = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
     forwarded_message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
-    forwarded_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    forwarded_to_chat_id = db.Column(db.Integer, db.ForeignKey('chat.id'), nullable=True)
+    forwarded_by_id      = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    forwarded_to_chat_id  = db.Column(db.Integer, db.ForeignKey('chat.id'), nullable=True)
     forwarded_to_group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
-    show_sender = db.Column(db.Boolean, default=True)
+    show_sender  = db.Column(db.Boolean, default=True)
     forwarded_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    original_message = db.relationship('Message', foreign_keys=[original_message_id])
+    original_message  = db.relationship('Message', foreign_keys=[original_message_id])
     forwarded_message = db.relationship('Message', foreign_keys=[forwarded_message_id])
-    forwarded_by = db.relationship('User', foreign_keys=[forwarded_by_id])
+    forwarded_by      = db.relationship('User', foreign_keys=[forwarded_by_id])
 
 
 class PasswordReset(db.Model):
     """Модель для токенов сброса пароля"""
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    token = db.Column(db.String(100), unique=True, nullable=False)
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    token      = db.Column(db.String(100), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
-    used = db.Column(db.Boolean, default=False)
+    used       = db.Column(db.Boolean, default=False)
 
     user = db.relationship('User', backref=db.backref('reset_tokens', lazy=True))
 
@@ -152,42 +158,34 @@ class PasswordReset(db.Model):
 class UserSession(db.Model):
     """
     Хранит информацию об активных и завершённых сессиях пользователя.
-    Позволяет показывать устройства входа и завершать конкретные сессии.
     """
-    id = db.Column(db.Integer, primary_key=True)
+    id      = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
-
-    # Уникальный токен сессии (хранится в Flask session)
     session_token = db.Column(db.String(64), unique=True, nullable=False, index=True)
 
-    # Информация об устройстве / браузере
-    ip_address = db.Column(db.String(45), nullable=True)       # IPv4 или IPv6
-    user_agent = db.Column(db.String(500), nullable=True)      # Полный UA-string
-    device_type = db.Column(db.String(20), nullable=True)      # mobile / tablet / desktop
-    browser = db.Column(db.String(100), nullable=True)         # Chrome 120, Safari 17...
-    os = db.Column(db.String(100), nullable=True)              # Windows 11, iOS 17...
-    country = db.Column(db.String(100), nullable=True)         # Страна (опционально)
-    city = db.Column(db.String(100), nullable=True)            # Город (опционально)
+    # ── Зашифрованные данные устройства / геолокации ───────────
+    ip_address  = db.Column(EncryptedType(45), nullable=True)
+    user_agent  = db.Column(EncryptedType(500), nullable=True)
+    device_type = db.Column(db.String(20), nullable=True)   # mobile/tablet/desktop — не PII
+    browser     = db.Column(EncryptedType(100), nullable=True)
+    os          = db.Column(EncryptedType(100), nullable=True)
+    country     = db.Column(EncryptedType(100), nullable=True)
+    city        = db.Column(EncryptedType(100), nullable=True)
 
-    # Временны́е метки
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)   # Время входа
-    last_active = db.Column(db.DateTime, default=datetime.utcnow)  # Последняя активность
-    ended_at = db.Column(db.DateTime, nullable=True)               # Время выхода (NULL = активна)
-
-    # Флаги
-    is_active = db.Column(db.Boolean, default=True)
-    is_current = db.Column(db.Boolean, default=False)  # Текущая сессия пользователя
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    last_active = db.Column(db.DateTime, default=datetime.utcnow)
+    ended_at    = db.Column(db.DateTime, nullable=True)
+    is_active   = db.Column(db.Boolean, default=True)
+    is_current  = db.Column(db.Boolean, default=False)
 
     def end_session(self):
-        """Завершает сессию"""
         self.is_active = False
-        self.ended_at = datetime.utcnow()
+        self.ended_at  = datetime.utcnow()
 
     def duration_str(self):
-        """Возвращает читаемую длительность сессии"""
-        end = self.ended_at or datetime.utcnow()
+        end   = self.ended_at or datetime.utcnow()
         delta = end - self.created_at
-        days = delta.days
+        days  = delta.days
         hours = delta.seconds // 3600
         minutes = (delta.seconds % 3600) // 60
         if days > 0:
@@ -198,8 +196,7 @@ class UserSession(db.Model):
             return f"{minutes} мин."
 
     def last_active_str(self):
-        """Возвращает читаемое время последней активности"""
-        now = datetime.utcnow()
+        now   = datetime.utcnow()
         delta = now - self.last_active
         if delta.seconds < 60:
             return "только что"
@@ -215,12 +212,12 @@ class UserSession(db.Model):
 
 class Contact(db.Model):
     """Контакты пользователя."""
-    id = db.Column(db.Integer, primary_key=True)
-    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    id         = db.Column(db.Integer, primary_key=True)
+    owner_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     contact_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    owner = db.relationship('User', foreign_keys=[owner_id], backref=db.backref('contacts', lazy=True))
+    owner        = db.relationship('User', foreign_keys=[owner_id], backref=db.backref('contacts', lazy=True))
     contact_user = db.relationship('User', foreign_keys=[contact_id])
 
     __table_args__ = (db.UniqueConstraint('owner_id', 'contact_id', name='unique_contact'),)
@@ -228,25 +225,23 @@ class Contact(db.Model):
 
 class UserPrivacy(db.Model):
     """Настройки приватности пользователя."""
-    id = db.Column(db.Integer, primary_key=True)
+    id      = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, unique=True, index=True)
-    # Кто может писать: 'all' | 'contacts'
     who_can_write = db.Column(db.String(20), default='all', nullable=False)
-    # Кто видит время захода: 'all' | 'contacts' | 'nobody'
-    last_seen = db.Column(db.String(20), default='all', nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen     = db.Column(db.String(20), default='all', nullable=False)
+    updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = db.relationship('User', backref=db.backref('privacy_settings', uselist=False, lazy=True))
 
 
 class BlockedUser(db.Model):
     """Чёрный список — заблокированные пользователи."""
-    id = db.Column(db.Integer, primary_key=True)
+    id         = db.Column(db.Integer, primary_key=True)
     blocker_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     blocked_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    blocker = db.relationship('User', foreign_keys=[blocker_id], backref=db.backref('blocked_users', lazy=True))
+    blocker      = db.relationship('User', foreign_keys=[blocker_id], backref=db.backref('blocked_users', lazy=True))
     blocked_user = db.relationship('User', foreign_keys=[blocked_id])
 
     __table_args__ = (db.UniqueConstraint('blocker_id', 'blocked_id', name='unique_block'),)

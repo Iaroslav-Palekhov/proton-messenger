@@ -92,7 +92,7 @@ def _serialize_message(msg: Message, current_user_id: int, app) -> dict:
         "file_name": msg.file_name,
         "file_type": msg.file_type,
         "file_size": format_file_size(msg.file_size) if msg.file_size else None,
-        "file_category": msg.file_category or (get_file_category(msg.file_name) if msg.file_name else None),
+        "file_category": msg.file_category or (get_file_category(msg.file_name) if msg.file_name else "file"),
         "file_icon": get_file_icon(msg.file_name) if msg.file_name else "[file]",
         "timestamp": msg.timestamp.strftime("%H:%M"),
         "is_read": msg.is_read,
@@ -340,17 +340,7 @@ def _emit_chat_update(chat_id: int, msg: Message, receiver_id: int):
     # Себе тоже (чтобы список чатов обновился на другой вкладке)
     socketio.emit("chat_updated", payload, to=f"user_{msg.sender_id}")
 
-    # ── ntfy push-уведомление получателю ──
-    try:
-        from ntfy_notifications import notify_new_message
-        recipient = User.query.get(receiver_id)
-        if recipient and recipient.push_token:
-            from flask import current_app
-            ntfy_server = recipient.ntfy_server or current_app.config.get('NTFY_SERVER', 'https://ntfy.sh')
-            sender_name = sender.username if sender else 'Кто-то'
-            notify_new_message(recipient, sender_name, preview, server=ntfy_server)
-    except Exception:
-        pass
+
 
 
 def _emit_group_update(group_id: int, msg: Message):
@@ -368,22 +358,7 @@ def _emit_group_update(group_id: int, msg: Message):
     for m in members:
         socketio.emit("chat_updated", payload, to=f"user_{m.user_id}")
 
-    # ── ntfy push-уведомления участникам (кроме отправителя) ──
-    try:
-        from ntfy_notifications import notify_group_message
-        from flask import current_app
-        group = Group.query.get(group_id)
-        sender_name = msg.sender.username if msg.sender else 'Кто-то'
-        group_name  = group.name if group else 'Группа'
-        for m in members:
-            if m.user_id == msg.sender_id:
-                continue
-            member_user = User.query.get(m.user_id)
-            if member_user and member_user.push_token:
-                ntfy_server = member_user.ntfy_server or current_app.config.get('NTFY_SERVER', 'https://ntfy.sh')
-                notify_group_message(member_user, sender_name, group_name, preview, server=ntfy_server)
-    except Exception:
-        pass
+
 
 
 def _schedule_link_preview(msg_id: int, content: str, chat_id, group_id, app):
@@ -461,25 +436,39 @@ def on_typing(data):
 
 @socketio.on("messages_read")
 def on_messages_read(data):
-    """Клиент сообщает, что прочитал сообщения в чате."""
+    """Клиент сообщает, что прочитал сообщения в чате или группе."""
     if not current_user.is_authenticated:
         return
-    chat_id = data.get("chat_id")
-    if not chat_id:
-        return
-    # Уведомляем отправителей непрочитанных сообщений
-    unread = Message.query.filter_by(
-        chat_id=chat_id,
-        receiver_id=current_user.id,
-        is_read=False,
-    ).all()
-    sender_ids = set()
-    for m in unread:
-        m.is_read = True
-        sender_ids.add(m.sender_id)
-    db.session.commit()
-    for sid in sender_ids:
-        socketio.emit("messages_read", {"chat_id": chat_id, "reader_id": current_user.id}, to=f"user_{sid}")
+    chat_id  = data.get("chat_id")
+    group_id = data.get("group_id")
+
+    if chat_id:
+        unread = Message.query.filter_by(
+            chat_id=chat_id,
+            receiver_id=current_user.id,
+            is_read=False,
+        ).all()
+        sender_ids = set()
+        for m in unread:
+            m.is_read = True
+            sender_ids.add(m.sender_id)
+        db.session.commit()
+        for sid in sender_ids:
+            socketio.emit("messages_read", {"chat_id": chat_id, "reader_id": current_user.id}, to=f"user_{sid}")
+
+    elif group_id:
+        unread = Message.query.filter(
+            Message.group_id == group_id,
+            Message.sender_id != current_user.id,
+            Message.is_read == False,
+        ).all()
+        sender_ids = set()
+        for m in unread:
+            m.is_read = True
+            sender_ids.add(m.sender_id)
+        db.session.commit()
+        for sid in sender_ids:
+            socketio.emit("messages_read", {"group_id": group_id, "reader_id": current_user.id}, to=f"user_{sid}")
 
 
 # ──────────────────────────────────────────────

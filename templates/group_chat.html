@@ -55,6 +55,53 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    /* Кнопка прокрутки вниз */
+    #scrollToBottomBtn {
+        position: absolute;
+        bottom: 80px;
+        right: 18px;
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: var(--bg-secondary);
+        border: 1.5px solid var(--border);
+        color: var(--text-primary);
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+        z-index: 100;
+        transition: opacity 0.2s, transform 0.2s;
+    }
+    #scrollToBottomBtn:hover {
+        background: var(--bg-hover);
+        transform: translateY(-2px);
+    }
+    #scrollToBottomBtn.visible {
+        display: flex;
+    }
+    #scrollToBottomBtn .scroll-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        min-width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 0 4px;
+        line-height: 1;
+    }
+    #scrollToBottomBtn .scroll-badge.has-count {
+        display: flex;
+    }
+
     /* Шапка чата */
     .chat-header {
         padding: 12px 20px;
@@ -1155,6 +1202,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let firstMessageId = {{ messages[0].id if messages else 0 }};
     let isScrolledUp = false;
     let scrollPosition = 0;
+    let unreadWhileScrolled = 0;
     let currentGroupId = {{ group.id }};
     let replyToId = null;
     let isSending = false;
@@ -1266,8 +1314,13 @@ document.addEventListener('DOMContentLoaded', function() {
             if (scrollHeight - scrollTop > clientHeight + 100) {
                 isScrolledUp = true;
                 scrollPosition = scrollHeight - scrollTop;
+                document.getElementById('scrollToBottomBtn')?.classList.add('visible');
             } else {
                 isScrolledUp = false;
+                unreadWhileScrolled = 0;
+                const badge = document.getElementById('scrollBadge');
+                if (badge) { badge.textContent = ''; badge.classList.remove('has-count'); }
+                document.getElementById('scrollToBottomBtn')?.classList.remove('visible');
             }
             // Подгрузка старых сообщений при скролле вверх
             if (scrollTop < 80 && !isLoadingOlder && !noMoreOlderMessages && firstMessageId > 0) {
@@ -1354,6 +1407,7 @@ document.addEventListener('DOMContentLoaded', function() {
             window._wsGroupConnected = true;
             socket.emit('join_group', { group_id: currentGroupId });
             socket.emit('heartbeat');
+            socket.emit('messages_read', { group_id: currentGroupId });
             console.log('[WS group] connected');
         });
 
@@ -1365,6 +1419,7 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('reconnect', () => {
             window._wsGroupConnected = true;
             socket.emit('join_group', { group_id: currentGroupId });
+            socket.emit('messages_read', { group_id: currentGroupId });
             updateMessages(); // загружаем пропущенные
         });
 
@@ -1383,6 +1438,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Новое сообщение
         socket.on('new_message', (message) => {
+            if (document.visibilityState === 'visible') {
+                socket.emit('messages_read', { group_id: currentGroupId });
+            }
             if (message.id > lastMessageId) lastMessageId = message.id;
 
             // Пересланные сообщения не имеют temp-элемента — обрабатываем как входящие
@@ -1431,7 +1489,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const msgContainer = document.getElementById('messagesContainer');
             const wasAtBottom = msgContainer.scrollHeight - msgContainer.scrollTop <= msgContainer.clientHeight + 50;
             addMessageToChat(message);
-            if (!isScrolledUp || wasAtBottom) msgContainer.scrollTop = msgContainer.scrollHeight;
+            if (!isScrolledUp || wasAtBottom) {
+                msgContainer.scrollTop = msgContainer.scrollHeight;
+            } else if (message.sender_id != {{ current_user.id }}) {
+                unreadWhileScrolled++;
+                const badge = document.getElementById('scrollBadge');
+                if (badge) {
+                    badge.textContent = unreadWhileScrolled > 99 ? '99+' : unreadWhileScrolled;
+                    badge.classList.add('has-count');
+                }
+            }
             if (message.content && !message.link_url) {
                 const msgEl = document.querySelector(`.message[data-message-id="${message.id}"]`);
                 if (msgEl) pollForLinkPreview(message.id, msgEl);
@@ -1453,11 +1520,22 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!data.messages || !data.messages.length) return;
             const container = document.getElementById('messagesContainer');
             const wasAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+            let newFromOthers = 0;
             data.messages.forEach(message => {
                 addMessageToChat(message);
                 if (message.id > lastMessageId) lastMessageId = message.id;
+                if (message.sender_id != {{ current_user.id }}) newFromOthers++;
             });
-            if (!isScrolledUp || wasAtBottom) container.scrollTop = container.scrollHeight;
+            if (!isScrolledUp || wasAtBottom) {
+                container.scrollTop = container.scrollHeight;
+            } else if (newFromOthers > 0) {
+                unreadWhileScrolled += newFromOthers;
+                const badge = document.getElementById('scrollBadge');
+                if (badge) {
+                    badge.textContent = unreadWhileScrolled > 99 ? '99+' : unreadWhileScrolled;
+                    badge.classList.add('has-count');
+                }
+            }
         });
 
         // Закрепление / открепление через WebSocket
@@ -1545,6 +1623,14 @@ document.addEventListener('DOMContentLoaded', function() {
         setInterval(() => {
             if (document.visibilityState === 'visible') socket.emit('heartbeat');
         }, 20000);
+
+        // При возврате на вкладку — помечаем сообщения прочитанными
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                socket.emit('heartbeat');
+                socket.emit('messages_read', { group_id: currentGroupId });
+            }
+        });
 
         // Typing
         const msgInput = document.getElementById('messageInput');
@@ -2582,13 +2668,26 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Прокрутка к сообщению
-    function scrollToMessage(messageId) {
+    function scrollToBottomAndReset() {
+        const container = document.getElementById('messagesContainer');
+        if (container) {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+        }
+        unreadWhileScrolled = 0;
+        const badge = document.getElementById('scrollBadge');
+        if (badge) { badge.textContent = ''; badge.classList.remove('has-count'); }
+        document.getElementById('scrollToBottomBtn')?.classList.remove('visible');
+        isScrolledUp = false;
+    }
+
+    function scrollToMessage(messageId, callback) {
         const messageElement = document.querySelector(`.message[data-message-id="${messageId}"]`);
         if (messageElement) {
             messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
             messageElement.style.animation = 'highlight 2s ease';
             setTimeout(() => {
                 messageElement.style.animation = '';
+                if (typeof callback === 'function') callback();
             }, 2000);
         }
     }
@@ -2607,6 +2706,42 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // --- Pinned messages navigation state ---
+    let _pinnedMessages = [];
+    let _pinnedIndex = 0;
+
+    function _getPinnedPreview(p) {
+        if (p.content) return p.content.length > 60 ? p.content.substring(0, 60) + '...' : p.content;
+        if (p.image_path) return '📷 Фото';
+        if (p.file_path) return '📎 ' + (p.file_name || 'Файл');
+        return '';
+    }
+
+    function _updateBannerDisplay() {
+        const banner = document.getElementById('pinnedBanner');
+        if (!banner || _pinnedMessages.length === 0) return;
+        const p = _pinnedMessages[_pinnedIndex];
+        const preview = _getPinnedPreview(p);
+        const labelEl = banner.querySelector('[data-pinned-label]');
+        const previewEl = banner.querySelector('[data-preview]');
+        if (labelEl) {
+            labelEl.textContent = _pinnedMessages.length > 1
+                ? `Закреплённое сообщение ${_pinnedMessages.length - _pinnedIndex} из ${_pinnedMessages.length}`
+                : 'Закреплённое сообщение';
+        }
+        if (previewEl) previewEl.textContent = preview;
+    }
+
+    function _onPinnedBannerClick(e) {
+        if (e.target.closest('button')) return;
+        if (_pinnedMessages.length === 0) return;
+        const p = _pinnedMessages[_pinnedIndex];
+        scrollToMessage(p.id, () => {
+            _pinnedIndex = (_pinnedIndex + 1) % _pinnedMessages.length;
+            _updateBannerDisplay();
+        });
+    }
+
     function refreshPinnedBanner() {
         fetch(`/get_pinned_messages/{{ group.id }}?is_group=true`)
             .then(r => r.json())
@@ -2614,45 +2749,41 @@ document.addEventListener('DOMContentLoaded', function() {
                 let banner = document.getElementById('pinnedBanner');
                 if (pinned.length === 0) {
                     if (banner) banner.remove();
+                    _pinnedMessages = [];
+                    _pinnedIndex = 0;
                     return;
                 }
 
-                const p = pinned[0];
-                let preview = '';
-                if (p.content) {
-                    preview = p.content.length > 60 ? p.content.substring(0, 60) + '...' : p.content;
-                } else if (p.image_path) {
-                    preview = '📷 Фото';
-                } else if (p.file_path) {
-                    preview = '📎 ' + (p.file_name || 'Файл');
-                }
+                _pinnedMessages = pinned;
+                if (_pinnedIndex >= pinned.length) _pinnedIndex = 0;
+
+                const p = pinned[_pinnedIndex];
+                const preview = _getPinnedPreview(p);
+                const labelText = pinned.length > 1
+                    ? `Закреплённое сообщение ${pinned.length - _pinnedIndex} из ${pinned.length}`
+                    : 'Закреплённое сообщение';
 
                 if (banner) {
-                    // Обновляем существующий баннер
+                    const labelEl = banner.querySelector('[data-pinned-label]');
                     const previewEl = banner.querySelector('[data-preview]');
+                    if (labelEl) labelEl.textContent = labelText;
                     if (previewEl) previewEl.textContent = preview;
-                    banner.onclick = (e) => {
-                        if (!e.target.closest('button')) scrollToMessage(p.id);
-                    };
+                    banner.style.display = '';
+                    banner.onclick = _onPinnedBannerClick;
                 } else {
-                    // Создаем новый баннер
                     banner = document.createElement('div');
                     banner.id = 'pinnedBanner';
-                    banner.onclick = (e) => {
-                        if (!e.target.closest('button')) scrollToMessage(p.id);
-                    };
-
+                    banner.onclick = _onPinnedBannerClick;
                     banner.innerHTML = `
                         <svg width="20" height="20" viewBox="0 0 1024 1024">
                             <use xlink:href="#icon-attach"></use>
                         </svg>
                         <div class="pinned-content">
-                            <div class="pinned-label">Закреплённое сообщение</div>
+                            <div class="pinned-label" data-pinned-label>${escapeHtml(labelText)}</div>
                             <div class="pinned-text" data-preview>${escapeHtml(preview)}</div>
                         </div>
                         <button class="close-btn" onclick="event.stopPropagation(); hidePinnedBanner()">&times;</button>
                     `;
-
                     const msgs = document.getElementById('messagesContainer');
                     msgs.parentElement.insertBefore(banner, msgs);
                 }
@@ -3137,7 +3268,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <use xlink:href="#icon-attach"></use>
         </svg>
         <div class="pinned-content">
-            <div class="pinned-label">Закреплённое сообщение</div>
+            <div class="pinned-label" data-pinned-label>Закреплённое сообщение{% if pinned_messages|length > 1 %} 1 из {{ pinned_messages|length }}{% endif %}</div>
             <div class="pinned-text" data-preview>
                 {% set pm = pinned_messages[0] %}
                 {% if pm.content %}{{ pm.content[:60] }}{% if pm.content|length > 60 %}...{% endif %}
@@ -3341,6 +3472,14 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         {% endif %}
     </main>
+
+    <!-- Кнопка прокрутки вниз -->
+    <button id="scrollToBottomBtn" onclick="scrollToBottomAndReset()" title="Вниз">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+        <span class="scroll-badge" id="scrollBadge"></span>
+    </button>
 
     <!-- Форма отправки сообщения -->
     <footer class="message-input">
@@ -3849,6 +3988,12 @@ document.addEventListener('DOMContentLoaded', function() {
             btn.style.display = '';
         });
     }
+    // Инициализация баннера закреплённых сообщений
+    const banner = document.getElementById('pinnedBanner');
+    if (banner) {
+        banner.onclick = _onPinnedBannerClick;
+    }
+    refreshPinnedBanner();
 });
 </script>
 

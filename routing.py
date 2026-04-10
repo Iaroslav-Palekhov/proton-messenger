@@ -1,6 +1,7 @@
 from flask import render_template, request, jsonify, redirect, url_for, send_from_directory, session
 from flask_login import login_user, login_required, logout_user, current_user
 from security import PasswordSecurity
+from encryption import hmac_hash
 from datetime import datetime, timedelta
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
@@ -178,14 +179,14 @@ def register_routes(app, db, login_manager):
             if password2 and password != password2:
                 return render_template('register.html', error='Пароли не совпадают')
 
-            if User.query.filter_by(email=email).first():
+            if User.query.filter_by(email_hash=hmac_hash(email)).first():
                 return render_template('register.html', error='Пользователь с такой почтой уже существует')
 
             if User.query.filter_by(username=username).first():
                 return render_template('register.html', error='Имя пользователя уже занято')
 
             hashed_password = PasswordSecurity.hash_password(password)
-            user = User(email=email, username=username, password=hashed_password)
+            user = User(email=email, email_hash=hmac_hash(email), username=username, password=hashed_password)
 
             db.session.add(user)
             db.session.commit()
@@ -235,7 +236,7 @@ def register_routes(app, db, login_manager):
                 return render_template('login.html', error=f'Слишком много попыток. Подождите {mins} мин.')
 
             user = User.query.filter(
-                (User.email == username) | (User.username == username)
+                (User.email_hash == hmac_hash(username)) | (User.username == username)
             ).first()
 
             if user and PasswordSecurity.verify_password(password, user.password):
@@ -252,16 +253,6 @@ def register_routes(app, db, login_manager):
                 tok = secrets.token_hex(32)
                 session['session_token'] = tok
                 new_sess = _create_session_record(user.id, tok, is_current=True)
-
-                # ── ntfy уведомление о новом входе ──
-                try:
-                    if user.push_token:
-                        from ntfy_notifications import notify_new_login
-                        device_str = f"{new_sess.browser or 'Браузер'} · {new_sess.os or 'ОС неизвестна'}"
-                        ntfy_server = user.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
-                        notify_new_login(user, new_sess.ip_address or '?', device_str, server=ntfy_server)
-                except Exception:
-                    pass
 
                 return redirect(url_for('chats'))
             else:
@@ -941,74 +932,6 @@ def register_routes(app, db, login_manager):
         return jsonify({'users': result})
 
     # ============================================================
-    # PUSH УВЕДОМЛЕНИЯ — СОХРАНИТЬ ТОКЕН
-    # ============================================================
-
-    @app.route('/security/notifications')
-    @login_required
-    def security_notifications():
-        """Страница настройки ntfy push-уведомлений."""
-        # ntfy_server хранится в БД
-        ntfy_server = current_user.ntfy_server or ''
-        return render_template('notifications.html', ntfy_server=ntfy_server)
-
-    @app.route('/security/notifications/save', methods=['POST'])
-    @login_required
-    def save_ntfy_settings():
-        """Сохраняет ntfy-топик и (опционально) URL сервера."""
-        topic  = (request.form.get('topic') or '').strip()
-        server = (request.form.get('server') or '').strip()
-
-        if not topic:
-            return jsonify({'error': 'Укажите топик'}), 400
-
-        # Базовая валидация: только безопасные символы
-        import re
-        if not re.match(r'^[A-Za-z0-9_\-]{1,200}$', topic):
-            return jsonify({'error': 'Топик может содержать только буквы, цифры, _ и -'}), 400
-
-        current_user.push_token = topic
-
-        # Сервер теперь хранится в БД
-        current_user.ntfy_server = server if server else None
-        db.session.commit()
-
-        return jsonify({'success': True})
-
-    @app.route('/security/notifications/test', methods=['POST'])
-    @login_required
-    def test_ntfy_notification():
-        """Отправляет тестовое ntfy-уведомление."""
-        topic  = (request.form.get('topic') or '').strip()
-        server = (request.form.get('server') or '').strip() or 'https://ntfy.sh'
-
-        if not topic:
-            return jsonify({'error': 'Укажите топик'}), 400
-
-        try:
-            from ntfy_notifications import send_notification
-            send_notification(
-                topic=topic,
-                title='[!] Тестовое уведомление',
-                message='Push-уведомления настроены и работают корректно!',
-                priority=3,
-                server=server,
-            )
-            return jsonify({'success': True})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
-    @app.route('/security/notifications/remove', methods=['POST'])
-    @login_required
-    def remove_ntfy_settings():
-        """Отключает push-уведомления."""
-        current_user.push_token = None
-        current_user.ntfy_server = None
-        db.session.commit()
-        session.pop('ntfy_server', None)
-        return jsonify({'success': True})
-
-    # ============================================================
     # ГРУППЫ
     # ============================================================
 
@@ -1502,10 +1425,15 @@ def register_routes(app, db, login_manager):
         q = request.args.get('q', '').strip()
         if not q:
             return jsonify({'groups': []})
-        results = Group.query.filter(
-            Group.visibility == 'public',
-            Group.name.ilike(f'%{q}%')
-        ).limit(20).all()
+        q_lower = q.lower()
+        # name зашифровано — нельзя фильтровать через SQL LIKE.
+        # Загружаем все публичные группы и фильтруем по расшифрованному имени в Python.
+        all_public = Group.query.filter(Group.visibility == 'public').all()
+        results = [
+            g for g in all_public
+            if q_lower in (g.name or '').lower()
+            or (g.group_username and q_lower in g.group_username.lower())
+        ][:20]
         data = []
         for g in results:
             is_member = bool(GroupMember.query.filter_by(group_id=g.id, user_id=current_user.id).first())
@@ -1572,175 +1500,143 @@ def register_routes(app, db, login_manager):
     @app.route('/send_message', methods=['POST'])
     @login_required
     def send_message():
-        chat_id     = request.form.get('chat_id')
-        group_id    = request.form.get('group_id')
-        content     = request.form.get('content')
-        file        = request.files.get('file')
-        reply_to_id = request.form.get('reply_to_id')
+        try:
+            chat_id     = request.form.get('chat_id')
+            group_id    = request.form.get('group_id')
+            content     = request.form.get('content')
+            file        = request.files.get('file')
+            reply_to_id = request.form.get('reply_to_id')
 
-        message = Message(
-            sender_id=current_user.id,
-            content=content if content else None,
-            reply_to_id=reply_to_id if reply_to_id else None
-        )
+            message = Message(
+                sender_id=current_user.id,
+                content=content if content else None,
+                reply_to_id=reply_to_id if reply_to_id else None
+            )
 
-        if content and contains_url(content):
-            urls = extract_urls_from_text(content)
-            if urls:
-                first_url = urls[0]
-                # Получаем превью асинхронно, чтобы не блокировать ответ
-                def fetch_preview_async(app_ctx, msg_id, url):
-                    with app_ctx:
-                        try:
-                            preview_data = extract_link_preview(url)
-                            if preview_data:
-                                from models import db as _db, Message as _Msg
-                                msg = _Msg.query.get(msg_id)
-                                if msg:
-                                    msg.link_url         = preview_data['url']
-                                    msg.link_title       = preview_data['title']
-                                    msg.link_description = preview_data['description']
-                                    msg.link_image       = preview_data['image']
-                                    msg.link_fetched_at  = datetime.utcnow()
-                                    _db.session.commit()
-                        except Exception:
-                            pass
+            # ─────────────────────────
+            # ЧАТ / ГРУППА
+            # ─────────────────────────
+            if chat_id:
+                chat_obj = Chat.query.get_or_404(chat_id)
 
-        if chat_id:
-            chat_obj = Chat.query.get_or_404(chat_id)
-            if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
-                return jsonify({'error': 'Нет доступа'}), 403
+                if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
+                    return jsonify({'error': 'Нет доступа'}), 403
 
-            receiver_id = chat_obj.user2_id if chat_obj.user1_id == current_user.id else chat_obj.user1_id
+                receiver_id = chat_obj.user2_id if chat_obj.user1_id == current_user.id else chat_obj.user1_id
 
-            # Запрет отправки если заблокированы (в любую сторону)
-            if _is_blocked_between(current_user.id, receiver_id):
-                return jsonify({'error': 'blocked'}), 403
+                if _is_blocked_between(current_user.id, receiver_id):
+                    return jsonify({'error': 'blocked'}), 403
 
-            message.chat_id     = chat_id
-            message.receiver_id = receiver_id
-            chat_obj.last_message_at = datetime.utcnow()
+                message.chat_id     = chat_id
+                message.receiver_id = receiver_id
+                chat_obj.last_message_at = datetime.utcnow()
 
-        elif group_id:
-            group      = Group.query.get_or_404(group_id)
-            membership = GroupMember.query.filter_by(
-                group_id=group_id,
-                user_id=current_user.id
-            ).first()
+            elif group_id:
+                group = Group.query.get_or_404(group_id)
 
-            if not membership:
-                return jsonify({'error': 'Нет доступа'}), 403
+                membership = GroupMember.query.filter_by(
+                    group_id=group_id,
+                    user_id=current_user.id
+                ).first()
 
-            # Проверка прав на запись
-            if getattr(group, 'write_permission', 'all') == 'admins_only':
-                if membership.role not in ['owner', 'admin']:
-                    return jsonify({'error': 'write_restricted'}), 403
+                if not membership:
+                    return jsonify({'error': 'Нет доступа'}), 403
 
-            message.group_id      = group_id
-            group.last_message_at = datetime.utcnow()
+                if getattr(group, 'write_permission', 'all') == 'admins_only':
+                    if membership.role not in ['owner', 'admin']:
+                        return jsonify({'error': 'write_restricted'}), 403
 
-        if file and file.filename:
-            filename      = file.filename
-            file_category = get_file_category(filename)
-            message.file_category = file_category
-            message.file_name     = filename
-            message.file_type     = file.content_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+                message.group_id      = group_id
+                group.last_message_at = datetime.utcnow()
 
-            file.seek(0, os.SEEK_END)
-            file_size = file.tell()
-            file.seek(0)
+            # ─────────────────────────
+            # ФАЙЛ
+            # ─────────────────────────
+            if file and file.filename:
+                filename = file.filename
+                file_category = get_file_category(filename)
 
-            if is_file_too_large(file_size, app):
-                return jsonify({'error': f'Файл слишком большой. Максимальный размер: {app.config["MAX_CONTENT_LENGTH"] / (1024*1024)} MB'}), 400
+                message.file_category = file_category
+                message.file_name     = filename
+                message.file_type     = file.content_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
 
-            try:
+                file.seek(0, os.SEEK_END)
+                file_size = file.tell()
+                file.seek(0)
+
+                if is_file_too_large(file_size, app):
+                    return jsonify({'error': 'Файл слишком большой'}), 400
+
                 filepath, size = save_file(file, file_category, app)
+
                 if file_category == 'image':
                     message.image_path = filepath
                 else:
                     message.file_path = filepath
+
                 message.file_size = size
-            except Exception as e:
-                return jsonify({'error': f'Ошибка сохранения файла: {str(e)}'}), 400
 
-        db.session.add(message)
-        db.session.commit()
+            # ─────────────────────────
+            # СОХРАНЕНИЕ
+            # ─────────────────────────
+            db.session.add(message)
+            db.session.commit()
 
-        # Запускаем получение превью ссылки в фоне (если нужно)
-        if content and contains_url(content):
-            urls = extract_urls_from_text(content)
-            if urls:
-                msg_id = message.id
-                first_url = urls[0]
-                t = threading.Thread(
-                    target=fetch_preview_async,
-                    args=(app.app_context(), msg_id, first_url),
-                    daemon=True
-                )
-                t.start()
+            # ─────────────────────────
+            # PREVIEW (фикс бага)
+            # ─────────────────────────
+            if content and contains_url(content):
+                urls = extract_urls_from_text(content)
 
-        # ntfy push-уведомления для всех сообщений (текст, файлы, картинки)
-        try:
-            from ntfy_notifications import notify_new_message, notify_group_message
-            preview = message.content[:60] if message.content else (
-                '[Фото]' if message.image_path else f'[Файл] {message.file_name or "Файл"}'
-            )
-            if message.chat_id and message.receiver_id:
-                from models import User as _User
-                recipient = _User.query.get(message.receiver_id)
-                if recipient and recipient.push_token:
-                    ntfy_server = recipient.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
-                    notify_new_message(recipient, current_user.username, preview, server=ntfy_server)
+                if urls:
+                    def fetch_preview_async(app_ctx, msg_id, url):
+                        with app_ctx:
+                            try:
+                                preview_data = extract_link_preview(url)
+                                if preview_data:
+                                    msg = Message.query.get(msg_id)
+                                    if msg:
+                                        msg.link_url = preview_data['url']
+                                        msg.link_title = preview_data['title']
+                                        msg.link_description = preview_data['description']
+                                        msg.link_image = preview_data['image']
+                                        msg.link_fetched_at = datetime.utcnow()
+                                        db.session.commit()
+                            except Exception as e:
+                                print("Preview error:", e)
+
+                    threading.Thread(
+                        target=fetch_preview_async,
+                        args=(app.app_context(), message.id, urls[0]),
+                        daemon=True
+                    ).start()
+
+            # ─────────────────────────
+            # SOCKET (ВСЕГДА!)
+            # ─────────────────────────
+            from socketio_events import socketio, _serialize_message, _emit_chat_update, _emit_group_update
+
+            payload = _serialize_message(message, current_user.id, app)
+
+            if message.chat_id:
+                socketio.emit('new_message', payload, to=f'chat_{message.chat_id}')
+                _emit_chat_update(message.chat_id, message, message.receiver_id)
+
             elif message.group_id:
-                from models import GroupMember as _GM, Group as _Group, User as _User
-                group = _Group.query.get(message.group_id)
-                members = _GM.query.filter_by(group_id=message.group_id).all()
-                for m in members:
-                    if m.user_id == current_user.id:
-                        continue
-                    member_user = _User.query.get(m.user_id)
-                    if member_user and member_user.push_token:
-                        ntfy_server = member_user.ntfy_server or app.config.get('NTFY_SERVER', 'https://ntfy.sh')
-                        notify_group_message(
-                            member_user, current_user.username,
-                            group.name if group else 'Группа',
-                            preview, server=ntfy_server
-                        )
-        except Exception:
-            pass  # ntfy не должен ломать отправку сообщения
+                socketio.emit('new_message', payload, to=f'group_{message.group_id}')
+                _emit_group_update(message.group_id, message)
 
-        # Эмитим WS-событие new_message чтобы получатель увидел файл/изображение мгновенно
-        if file and file.filename:
-            try:
-                from socketio_events import socketio as _sio, _serialize_message, _emit_chat_update, _emit_group_update
-                payload = _serialize_message(message, current_user.id, app)
-                if message.chat_id:
-                    _sio.emit('new_message', payload, to=f'chat_{message.chat_id}')
-                    _emit_chat_update(message.chat_id, message, message.receiver_id)
-                elif message.group_id:
-                    _sio.emit('new_message', payload, to=f'group_{message.group_id}')
-                    _emit_group_update(message.group_id, message)
-            except Exception:
-                pass  # Не блокируем ответ если WS недоступен
+            # ─────────────────────────
+            return jsonify({
+                'success': True,
+                'message_id': message.id,
+                'timestamp': message.timestamp.strftime('%H:%M'),
+                'content': message.content
+            })
 
-        return jsonify({
-            'success': True,
-            'message_id': message.id,
-            'timestamp': message.timestamp.strftime('%H:%M'),
-            'content': message.content,
-            'image_path': url_for('download_file', filepath=message.image_path) if message.image_path else None,
-            'file_path': url_for('download_file', filepath=message.file_path) if message.file_path else None,
-            'file_name': message.file_name,
-            'file_size': format_file_size(message.file_size) if message.file_size else None,
-            'file_category': message.file_category,
-            'file_icon': get_file_icon(message.file_name) if message.file_name else None,
-            'link_url': message.link_url,
-            'link_title': message.link_title,
-            'link_description': message.link_description,
-            'link_image': message.link_image,
-            'is_forwarded': message.is_forwarded,
-            'reply_to_id': message.reply_to_id
-        })
+        except Exception as e:
+            print("SEND_MESSAGE ERROR:", e)
+            return jsonify({'error': str(e)}), 500
 
     @app.route('/forward_message', methods=['POST'])
     def forward_message():
@@ -2192,20 +2088,21 @@ def register_routes(app, db, login_manager):
             membership = GroupMember.query.filter_by(group_id=context_id, user_id=current_user.id).first()
             if not membership:
                 return jsonify({'error': 'Нет доступа'}), 403
-            messages = Message.query.filter(
+            # Шифрование: ilike невозможен — грузим не удалённые сообщения, фильтруем в Python
+            all_msgs = Message.query.filter(
                 Message.group_id == context_id,
-                Message.content.ilike(f'%{query_str}%'),
                 Message.is_deleted == False
-            ).order_by(Message.timestamp.desc()).limit(50).all()
+            ).order_by(Message.timestamp.desc()).limit(500).all()
+            messages = [m for m in all_msgs if m.content and query_str.lower() in m.content.lower()][:50]
         else:
             chat_obj = Chat.query.get_or_404(context_id)
             if chat_obj.user1_id != current_user.id and chat_obj.user2_id != current_user.id:
                 return jsonify({'error': 'Нет доступа'}), 403
-            messages = Message.query.filter(
+            all_msgs = Message.query.filter(
                 Message.chat_id == context_id,
-                Message.content.ilike(f'%{query_str}%'),
                 Message.is_deleted == False
-            ).options(joinedload(Message.sender)).order_by(Message.timestamp.desc()).limit(50).all()
+            ).options(joinedload(Message.sender)).order_by(Message.timestamp.desc()).limit(500).all()
+            messages = [m for m in all_msgs if m.content and query_str.lower() in m.content.lower()][:50]
 
         result = []
         for msg in messages:
@@ -2465,7 +2362,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
             if not username or not email:
                 return render_template('forgot_password.html', error='Заполните все поля')
 
-            user = User.query.filter_by(username=username, email=email).first()
+            user = User.query.filter_by(username=username, email_hash=hmac_hash(email)).first()
 
             if not user:
                 return render_template('forgot_password.html',
@@ -2596,17 +2493,5 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
                     'timestamp': msg.timestamp.strftime('%d.%m.%Y %H:%M')
                 })
         return jsonify(result)
-
-    # ============================================================
-    # СТРАНИЦЫ ПРИЛОЖЕНИЙ
-    # ============================================================
-
-    @app.route('/app')
-    def apps_page():
-        return render_template('app.html')
-
-    @app.route('/app/ntfy')
-    def app_ntfy():
-        return render_template('app_ntfy.html')
 
     return app

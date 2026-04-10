@@ -21,3 +21,4 @@ flask-socketio
 simple-websocket
 gevent 
 gevent-websocket
+psycopg2-binary

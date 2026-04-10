@@ -1284,9 +1284,10 @@
 
         // Если поле пустое — показываем все чаты, скрываем результаты поиска
         if (!q) {
-            document.querySelectorAll('.chat-item-wrapper').forEach(w => w.style.display = 'flex');
             const sr = document.getElementById('searchResultsSection');
             if (sr) sr.remove();
+            // Принудительно обновляем список чатов
+            fetchChatsList();
             return;
         }
 
@@ -1454,6 +1455,9 @@
     }
 
     function fetchChatsList() {
+        // Не перезаписываем список пока активен поиск
+        const q = (document.getElementById('searchInput') || {}).value || '';
+        if (q.trim()) return;
         fetch('/api/get_chats_data')
             .then(r => { if (!r.ok) throw new Error(); return r.json(); })
             .then(data => updateChatsList(data.chats))
@@ -1463,6 +1467,9 @@
     function updateChatsList(chats) {
         const chatsList = document.getElementById('chatsList');
         if (!chatsList) return;
+        // Не перезаписываем пока активен поиск
+        const q = (document.getElementById('searchInput') || {}).value || '';
+        if (q.trim()) return;
         const scrollTop = chatsList.scrollTop;
         let html = '';
 

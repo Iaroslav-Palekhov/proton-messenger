@@ -65,18 +65,22 @@ def allowed_file(filename):
 
 def get_file_category(filename):
     """Определяет категорию файла по расширению"""
+
+    # 🔴 ФИКС: защита от None
+    if not filename:
+        return 'other'
+
     # Получаем расширение файла
     if '.' in filename:
         ext = filename.rsplit('.', 1)[1].lower()
     else:
         ext = ''
 
-    # Проверяем на специальные случаи
-    # .docx, .xlsx, .pptx и другие офисные форматы
+    # Офисные форматы
     if ext in ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'odt', 'ods', 'odp', 'rtf', 'pdf']:
         return 'document'
     
-    # Другие расширения
+    # Категории
     image_ext = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'heic', 'raw'}
     video_ext = {'mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'mpg', 'mpeg'}
     audio_ext = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus'}
@@ -121,8 +125,7 @@ def get_file_icon(filename):
         # Исполняемые
         'exe': '[exe]', 'msi': '[exe]', 'sh': '[sh]', 'bat': '[bat]', 'apk': '[apk]',
     }
-    #return icons.get(ext, '[file]')
-    return icons.get(ext, icons['default'])
+    return icons.get(ext, '[file]')
 
 def format_file_size(size_bytes):
     if size_bytes is None:

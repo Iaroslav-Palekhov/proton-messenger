@@ -3,19 +3,19 @@
     --bg-secondary: #1f2c33;
     --bg-tertiary: #2a3942;
     --bg-hover: #2e3e48;
-    --accent: #00a884;
-    --accent-hover: #039b7b;
+    --accent: #9f60f5;
+    --accent-hover: #8b4de0;
+    --success: #9f60f5;
+    --sent-message: #3b1a7a;
+    --sent-message-text: #ffffff;
+    --messages-bg: #0e1c26;
     --text-primary: #ffffff;
     --text-secondary: #8696a0;
     --text-muted: #667781;
     --border: #3c4a53;
-    --sent-message: #005c4b;
-    --sent-message-text: #ffffff;
     --received-message: #1f2c33;
-    --messages-bg: #0e1c26;
     --danger: #df4949;
     --danger-bg: rgba(223, 73, 73, 0.15);
-    --success: #00a884;
     --warning: #ffc107;
     --shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
     --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.2);
@@ -31,22 +31,15 @@
     --bg-secondary: #ffffff;
     --bg-tertiary: #f0f2f5;
     --bg-hover: #e8eaed;
-    --accent: #25a87e;
-    --accent-hover: #1e9370;
     --text-primary: #111b21;
     --text-secondary: #54656f;
     --text-muted: #8696a0;
     --border: #d1d7db;
-    --sent-message: #d9fdd3;
-    --sent-message-text: #111b21;
     --received-message: #ffffff;
     --danger: #df4949;
     --danger-bg: rgba(223, 73, 73, 0.1);
-    --success: #25a87e;
     --shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
     --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.08);
-    --messages-bg: #efeae2;
-    --messages-bg-pattern: none;
 }
 
 /* ============================================================
